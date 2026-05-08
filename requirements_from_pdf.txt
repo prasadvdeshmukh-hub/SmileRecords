@@ -1,0 +1,843 @@
+
+--- PAGE 1 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+DentaVault / Dentist Patient Data Management 
+Application
+Compliant Project Plan, BRD, Security & Google Play Readiness
+Mobile App + Web Admin Panel + Firebase Backend
+Item Details
+Prepared for Dentist / clinic patient-record application planning
+Version 1.0
+Primary users Doctor, dentist, clinic admin, receptionist, dental 
+assistant, support staff
+Primary platform Flutter mobile app, React/Next.js web admin, Firebase 
+backend
+Important note This document is a product and compliance planning 
+guide. Legal/regulatory review is recommended before 
+launch.
+--- PAGE 2 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+1. Executive Summary
+The proposed application is a secure, simple, dentist-focused patient record management system. It will 
+allow approved clinic users to capture patient data from a mobile app and allow clinic 
+administrators/doctors to manage users, roles, masters, records, analytics, and compliance controls from a 
+web admin panel.
+The system should be positioned as a clinic record management and follow-up tool, not as an autonomous 
+diagnostic system. Any AI or analytics added in later phases should remain assistive and should not replace 
+the clinical judgement of a qualified doctor.
+ Mobile app for patient registration, photo capture, X-ray/document upload, prescriptions, reminders, 
+and notifications.
+ Web admin panel for user approval, role management, medicine master, analytics, audit logs, reports, 
+and clinic settings.
+ Firebase Authentication, Firestore, Storage, Cloud Messaging, Cloud Functions, and Hosting as the 
+proposed backend stack.
+ Compliance controls built from day one: consent, privacy policy, role-based access, audit logs, data 
+deletion process, Google Play declarations, secure storage, and data minimization.
+2. Regulatory and Policy Basis
+The application stores personal and sensitive health/medical data. The following policy and legal areas must 
+be addressed before public release or clinic use.
+Area Requirement to Plan For Source / Basis
+Google Play Health Apps Complete Health Apps declaration in 
+Play Console; publish a privacy 
+policy; disclose health/medical data 
+handling.
+Google Play Health Content and 
+Services policy; Health Apps 
+declaration guidance.
+Google Play User Data Accurately disclose collection, use, 
+sharing, security, and retention; do 
+not sell personal/sensitive user data; 
+use modern cryptography in transit.
+Google Play User Data policy and 
+Data Safety section guidance.
+India DPDP Act, 2023 Collect personal data with lawful 
+purpose, notice, consent where 
+applicable, safeguards, rights for 
+correction/erasure/grievance, and 
+child/guardian handling.
+Digital Personal Data Protection Act, 
+2023.
+Health data exchange / ABDM 
+principles
+If ABHA/ABDM integration is added 
+later, use consent-based health 
+record sharing and security-by-
+design principles.
+ABDM Health Data Management 
+Policy and public ABDM guidance.
+Infosec best practices Use least privilege, audit logs, secure 
+storage, backup, incident response, 
+vulnerability management, and SDLC 
+controls.
+Security-by-design and healthcare 
+data protection expectations.
+--- PAGE 3 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+3. Product Scope
+3.1 In Scope - MVP
+ Google login and admin approval before access.
+ Role-based access control for doctor, admin, receptionist, assistant, viewer, and pending user.
+ Patient registration with photo, identity/contact data, medical history, dental details, and consent 
+capture.
+ Visit history with diagnosis, tooth number, treatment notes, treatment status, and follow-up date.
+ X-ray and document upload with document type, visit mapping, and secure storage.
+ Prescription creation using medicine master and prescription templates.
+ Follow-up reminders and push notifications.
+ Web admin panel with user approval, role management, patient management, medicine master, 
+templates, analytics, audit logs, reports, and clinic settings.
+ Privacy, consent, data safety, audit log, and security controls required for launch readiness.
+3.2 Out of Scope - Phase 1
+ AI diagnosis, autonomous medical advice, X-ray disease detection, or treatment recommendations 
+without doctor approval.
+ Payment/billing, insurance claims, WhatsApp messaging, ABHA/ABDM integration, OCR, and multi-clinic 
+franchise model.
+ Public patient portal unless added after stronger security and legal review.
+4. User Roles and Access Model
+Role Access Summary Key Restrictions
+Super Admin / Clinic Owner Full access to clinic settings, users, 
+roles, patients, medicines, analytics, 
+exports, audit logs.
+Should be protected by strong 
+account controls and limited to 
+owner/authorized doctor.
+Dentist / Doctor View patients, add 
+diagnosis/treatment, create 
+prescription, review 
+X-rays/documents, set follow-up.
+Cannot change platform settings 
+unless also admin.
+Clinic Admin Manage users, reports, follow-ups, 
+and clinic operations.
+Clinical notes/prescriptions only if 
+explicitly permitted.
+Receptionist Register patients, update basic 
+details, schedule follow-ups, upload 
+basic documents.
+No access to edit 
+diagnosis/prescription unless 
+approved.
+Dental Assistant Upload X-rays/photos/documents, 
+add preliminary notes, view assigned 
+cases.
+No delete/export/admin controls.
+Viewer / Auditor Read-only access to assigned records. No create/edit/delete.
+Pending User Logged in but no patient-data access. Must wait for admin approval.
+--- PAGE 4 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+5. Consent and Patient Data Capture
+Consent must be captured before saving medical history, treatment notes, prescriptions, X-rays, documents, 
+or patient photos. For minor patients, consent must be captured from a parent or legal guardian.
+5.1 Recommended Consent Flow
+1. Clinic user opens Add Patient.
+2. Patient/guardian reads consent text in English and optional Marathi/Hindi.
+3. Patient/guardian ticks an unchecked checkbox confirming that they have read and agreed.
+4. Patient/guardian signs using finger/stylus on mobile screen.
+5. System stores consent text version, timestamp, captured-by user, patient/guardian details, and signature 
+image.
+6. System generates an immutable consent record and audit log.
+7. Patient record can be saved only after valid consent is captured, except where clinic policy allows 
+minimal emergency records.
+5.2 Consent Data Fields
+Field Purpose
+Consent given Confirms acceptance.
+Consent type Adult / guardian / digital / written / verbal.
+Consent text version Identifies exact text accepted.
+Consent text snapshot Stores exact wording shown to patient.
+Patient/guardian name and relation Proof of who gave consent.
+Timestamp Proof of when consent was given.
+Captured by Clinic user who captured consent.
+Signature image/PDF Evidence of signed consent.
+Withdrawal status Supports future withdrawal/restriction flow.
+Audit log reference Links consent event to audit trail.
+6. Functional Requirements - Mobile App
+Module Requirement
+Login and Pending Approval Google login, pending approval screen, logout, role/status 
+check.
+Dashboard Add Patient, Search Patient, Today Follow-ups, Recent 
+Patients, Upload X-ray, Create Prescription, Notifications.
+Patient Registration Basic details, photo, medical history, dental complaint, 
+diagnosis, consent, and follow-up.
+Photo and Document Capture Camera/gallery upload, crop/compress, document 
+categorization, secure storage.
+X-ray Management Upload OPG/IOPA/CBCT/Bitewing/Periapical, before/after 
+flag, remarks, tooth number.
+Visit History Visit date, doctor, complaint, pain level, diagnosis, 
+treatment advised/done, notes, next follow-up.
+Prescription Select medicines, dosage/frequency/duration, advice, 
+follow-up, preview, history.
+Reminders Follow-up, medicine, appointment, X-ray review, pending 
+treatment reminders.
+Notifications Follow-up due, approval status, prescription pending, 
+--- PAGE 5 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+system alerts.
+User Profile Name, email, role, approval status, clinic, last login, 
+logout.
+7. Functional Requirements - Web Admin Panel
+Module Requirement
+Admin Dashboard Total patients, today visits, follow-ups, pending 
+approvals, prescriptions, X-rays, active users, trends.
+User Approval Approve/reject/suspend/reactivate users; assign role and 
+clinic.
+Role Management Create roles and permissions for 
+add/edit/delete/view/export/admin/analytics actions.
+Patient Management Search/filter/view/edit patient records, timeline, 
+prescriptions, X-rays, documents, reminders.
+Medicine Master Medicine name, generic/brand, type, strength, dosage, 
+frequency, duration, food instruction, active status.
+Prescription Templates Standard treatment templates for extraction, RCT, scaling, 
+pain, infection, surgery care.
+Document Master Manage categories for X-ray, consent, prescription, 
+report, photo, invoice, other.
+Analytics Patient, treatment, prescription, follow-up, and user 
+activity analytics.
+Reports Patient, visit, prescription, medicine usage, follow-up, 
+user activity, treatment status reports.
+Audit Logs View user actions, records changed, timestamps, 
+before/after summaries.
+Clinic Settings Clinic name, address, doctor, contact, logo, working days, 
+prescription header/footer.
+8. Data Management and Storage Plan
+8.1 Data Categories
+Data Category Examples Sensitivity Storage Control
+Identity/contact Name, mobile, email, age, 
+gender, address
+Personal data Firestore with role-based 
+rules.
+Medical/dental history Diabetes, BP, allergies, 
+diagnosis, treatment notes
+Sensitive health data Restricted access; audit 
+logs.
+Clinical documents X-rays, prescriptions, lab 
+reports, consent forms
+Sensitive health data Firebase Storage with 
+private access rules.
+Photos Patient photo, 
+dental/treatment photos
+Sensitive personal/health 
+data
+Consent required; private 
+storage.
+User/admin data User profile, role, approval 
+status, activity
+Business/personal data Admin-only access 
+controls.
+Audit data Actions, timestamps, user 
+IDs, entity changed
+Security data Tamper-resistant storage; 
+restricted admin view.
+--- PAGE 6 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+8.2 Suggested Firebase Collections
+ clinics
+ users
+ roles
+ patients
+ visits
+ prescriptions
+ medicines
+ documents
+ reminders
+ notifications
+ audit_logs
+ settings
+ consents
+8.3 Retention and Deletion Policy
+Record Type Suggested Retention Deletion / Archive Rule
+Patient clinical record As per clinic/legal policy; usually 
+long-term medical record retention.
+Soft-delete first; permanent deletion 
+only after authorized process.
+Consent record Retain as proof of processing while 
+patient record exists and as legally 
+needed.
+Do not delete casually; archive with 
+patient record.
+X-rays/documents As per clinic/legal policy and patient 
+request handling.
+Delete/restrict only through 
+authorized admin process.
+Audit logs Minimum 1-3 years or longer based 
+on clinic policy.
+Append-only; no normal user 
+deletion.
+Rejected/pending users Limited retention for security/admin 
+purposes.
+Purge periodically if not required.
+9. Security and Infosec Requirements
+ Authentication: Use Firebase Authentication with Google Sign-In. Do not allow anonymous access to 
+patient data.
+ Admin approval: Every new user must remain pending until approved and assigned a role.
+ Authorization: Use role-based and clinic-based access control in both frontend and backend/security 
+rules.
+ Least privilege: Each role should get the minimum permissions needed for its job.
+ Encryption in transit: All network traffic must use HTTPS/TLS; do not send data over insecure channels.
+ Storage security: Patient files must not be publicly accessible. Use private Firebase Storage paths and 
+access tokens/rules carefully.
+ Audit logs: Track create/update/delete/view/export actions for sensitive records.
+ Data minimization: Collect only data needed for treatment, follow-up, and clinic record management.
+ Secrets management: No API keys/secrets in public repositories. Use environment configuration and 
+restricted Firebase rules.
+ Backups: Define backup and restore process for Firestore and Storage.
+--- PAGE 7 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+ Device security: Avoid storing sensitive patient data locally. If offline cache is enabled later, encrypt it.
+ Access review: Admin should periodically review users and roles.
+ Incident response: Create a breach response plan, contact owner, severity classification, containment 
+steps, and patient notification approach.
+ Vulnerability management: Use dependency scanning, static analysis, manual security testing, and 
+release checklist before launch.
+10. Google Play Store Readiness Checklist
+Checklist Item Required Action
+Health Apps declaration Declare health/medical functionality accurately in Play 
+Console.
+Data Safety section Declare all data collected/shared/protected, including 
+patient records, photos, documents, health data, account 
+data, and device identifiers if used.
+Privacy Policy URL Publish a non-PDF, publicly accessible, non-geofenced 
+privacy policy URL and link it in Play Console and in the 
+app.
+In-app disclosure Before collecting sensitive patient data, show clear in-app 
+consent/disclosure explaining data collected and purpose.
+Permissions Request only required permissions such as camera, 
+photos/files, notifications. Remove unused permissions.
+Account deletion/data deletion Provide process to request deletion/closure where 
+applicable.
+No misleading medical claims Do not claim automated diagnosis or guaranteed medical 
+results.
+Testing track Complete internal/closed testing, policy review, and data 
+safety verification before production release.
+11. Privacy Policy and Terms Content Requirements
+ Types of data collected: user account, patient identity/contact, medical/dental details, prescriptions, X-
+rays, documents, photos, reminders, audit logs.
+ Purpose of collection: consultation, treatment, prescription, follow-up, clinic record management, 
+reporting, security, and compliance.
+ Who can access: authorized clinic users according to assigned roles.
+ Storage and processing: Firebase/Google Cloud or chosen backend providers; describe security 
+safeguards.
+ Sharing: no sale of personal/sensitive data; sharing only with clinic users, service providers, patient-
+authorized sharing, or legal requirements.
+ Retention and deletion: explain retention policy and deletion/correction request process.
+ Children/minors: parent/guardian consent process.
+ Contact details: privacy grievance/contact email and clinic/admin contact.
+--- PAGE 8 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+12. UI/UX Direction
+ Extremely simple white-background UI for clinic staff and doctors.
+ Dental blue as primary color, mint as secondary accent, light gray cards, clear black/navy text.
+ Large buttons, large form fields, minimal clicks, and short forms broken into sections.
+ Doctor/dentist friendly icons: tooth, calendar, file, X-ray, medicine, prescription, reminder.
+ Lightweight animations only: splash, card entry, success confirmation, upload progress, empty states.
+13. Analytics and Dashboard Plan
+Analytics Area Metrics
+Patient analytics Total patients, new/returning patients, age/gender/city 
+distribution.
+Visit analytics Today visits, monthly trend, doctor-wise visits, visit 
+frequency.
+Treatment analytics Common complaints, treatment status, 
+pending/completed treatment.
+Prescription analytics Medicine usage, antibiotic/painkiller trends, prescription 
+count by doctor.
+Follow-up analytics Due today, missed, completed, pending, conversion rate.
+User activity Records added, documents uploaded, prescriptions 
+created, logins, approvals.
+14. Development Roadmap
+Phase Duration Deliverables
+Phase 0 - Discovery 3-5 days Finalize app name, clinic workflows, 
+roles, compliance assumptions, 
+consent wording, and wireframes.
+Phase 1 - Foundation 1 week Firebase project, authentication, user 
+profile, pending approval, role 
+model, app shell.
+Phase 2 - Patient Core 1-2 weeks Patient registration, photo capture, 
+consent, medical/dental history, 
+patient search/profile.
+Phase 3 - Clinical Records 1-2 weeks Visits, X-ray/document upload, 
+document viewer, patient timeline.
+Phase 4 - Prescription 1 week Medicine master, prescription 
+creation, templates, prescription 
+preview/history.
+Phase 5 - Reminders 1 week Follow-up reminders, notifications, 
+today follow-ups, reminder status.
+Phase 6 - Admin and Analytics 1-2 weeks Admin dashboard, reports, analytics, 
+user approval, role management, 
+audit logs.
+Phase 7 - Security/Compliance/UAT 1 week Security rules, policy docs, Play Store 
+declaration prep, test cases, UAT, 
+fixes.
+--- PAGE 9 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+15. Testing and Quality Plan
+ Functional testing for every module and role.
+ Role-based access testing: pending users cannot access records; receptionist cannot edit prescription 
+unless permitted.
+ Security rules testing for Firestore and Storage.
+ Consent flow testing for adult and minor patients.
+ Data Safety review: app behavior must match Play Console declarations and privacy policy.
+ Performance testing for patient search, image upload, and dashboard charts.
+ Backup/restore test before production.
+ UAT with doctor, receptionist, and dental assistant.
+16. Risk Register
+Risk Impact Mitigation
+Unauthorized access to patient data High Admin approval, RBAC, Firebase 
+rules, audit logs, periodic access 
+review.
+Incorrect Google Play data 
+declaration
+High Map actual data flows before 
+submission; keep declarations and 
+privacy policy aligned.
+Patient consent dispute High Use checkbox + finger signature + 
+consent text snapshot + timestamp + 
+audit log.
+Public exposure of X-rays/documents High Private storage rules, no public 
+buckets, restricted signed access.
+Over-scoped MVP Medium Launch core patient-record workflow 
+first; defer billing, AI, WhatsApp, 
+OCR.
+Data loss High Backup/restore plan, soft-delete, 
+admin-only deletion, monitoring.
+Medical claim/reliability issue High Avoid automated diagnosis claims; 
+add medical disclaimer; keep AI 
+assistive only.
+17. Deliverables
+ Mobile app BRD and UI wireframes.
+ Web admin BRD and dashboard wireframes.
+ Firebase data model and security rule design.
+ Consent text in English and optional Marathi/Hindi.
+ Privacy Policy, Terms, Medical Disclaimer, Data Deletion Policy drafts.
+ Google Play Data Safety and Health Apps declaration checklist.
+ Test plan, UAT checklist, release checklist, and risk register.
+--- PAGE 10 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+18. Final Recommendation
+Proceed with a controlled MVP focused on clinic-internal patient record management. Build compliance, 
+consent, security, and role controls from the first sprint. Avoid AI diagnosis, public patient access, billing, 
+WhatsApp, and ABHA integration until the core workflow is secure and stable.
+19. Reference Sources
+ Google Play - Health Content and Services policy: https://support.google.com/googleplay/android-
+developer/answer/16679511
+ Google Play - Health Apps declaration form guidance: https://support.google.com/googleplay/android-
+developer/answer/14738291
+ Google Play - Data Safety section guidance: 
+https://support.google.com/googleplay/android-developer/answer/10787469
+ Google Play - User Data policy: 
+https://support.google.com/googleplay/android-developer/answer/10144311
+ Digital Personal Data Protection Act, 2023 - MeitY official PDF: 
+https://www.meity.gov.in/static/uploads/2024/06/2bf1f0e9f04e6fb4f8fef35e82c42aa5.pdf
+ ABDM Health Data Management / Privacy guidance PDF: 
+https://abdm.gov.in/strapicms/uploads/privacypolicy_178041845b.pdf
+ PIB - ABDM cybersecurity and consent-based health data exchange update: 
+https://www.pib.gov.in/PressReleaseIframePage.aspx?PRID=2152537
+APPENDIX A - DETAILED FUNCTIONALITY LIST
+This appendix expands the BRD into a module-wise functionality catalogue for the Dentist Patient Data Management Application. 
+It is intended for development planning, sprint backlog creation, UAT preparation, role-permission mapping, and 
+admin/mobile/web scope control.
+A1. Functional Coverage Summary
+Area Detailed Functions
+Mobile App Google login, pending approval, dashboard, patient registration, 
+photo capture, medical history, dental complaint, visits, X-rays, 
+documents, prescriptions, reminders, notifications, search, profile, 
+settings.
+Web Admin Panel User approval, role management, patient management, medicine 
+master, prescription templates, document categories, analytics, 
+reports, audit logs, clinic settings, configuration.
+Security & Compliance Consent capture, role-based access, clinic-wise isolation, 
+Firebase security rules, audit logs, data retention, privacy policy, 
+user suspension, soft delete, secure file storage.
+Analytics Patient growth, visit trend, follow-up status, treatment analysis, 
+medicine usage, user productivity, prescription metrics, pending 
+actions.
+Future Scope Billing, appointment calendar, WhatsApp reminders, dental chart, 
+X-ray annotation, AI summaries, OCR, multi-clinic support, patient 
+portal.
+--- PAGE 11 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+A2. Mobile Application - Detailed Functionality
+Splash and App Launch
+ Load dental-themed logo with smooth animation.
+ Check user session and route to login, pending approval, or dashboard.
+ Handle offline/poor network message gracefully.
+ Use white/minimal dental-friendly visual style.
+Google Login and Authentication
+ Allow Google sign-in only for authorized clinic users.
+ Create new user profile automatically with pending status.
+ Show pending approval screen until admin approves access.
+ Prevent patient data access for pending/rejected/suspended users.
+ Maintain last login timestamp and device details.
+User Profile
+ Display user name, email, photo, role, approval status, clinic name, and last login.
+ Allow logout.
+ Show role-based permission summary.
+ Show support/contact information for access issues.
+Mobile Dashboard
+ Show quick action cards: Add Patient, Search Patient, Today Follow-ups, Upload X-ray, Create Prescription, 
+Notifications.
+ Show count of today follow-ups, recent patients, pending prescriptions, and uploaded documents.
+ Display role-specific shortcuts based on user permissions.
+ Use large buttons and minimal navigation for clinic staff.
+Patient Registration
+ Auto-generate patient ID.
+ Capture basic details: name, mobile, alternate mobile, DOB, age, gender, email, address, city, occupation.
+ Capture medical history: diabetes, blood pressure, allergy, heart disease, pregnancy status, current medication, past 
+surgery, tobacco/smoking, other notes.
+ Capture dental details: chief complaint, pain level, tooth number, diagnosis, treatment suggested, treatment status, 
+next follow-up date.
+ Validate mandatory fields before saving.
+ Prevent duplicate patient entries based on mobile number and name match warning.
+Consent Capture
+ Show consent text before saving patient medical data.
+ Patient/guardian must tick checkbox after reading consent.
+ Optional signature pad for finger/stylus signature.
+ Capture guardian name and relation for minor patients.
+ Store consent version, consent date/time, captured by user, patient/guardian name, and signature image if captured.
+ Do not allow X-ray/document/prescription upload until consent exists unless admin override is enabled.
+--- PAGE 12 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+Patient Photo Capture
+ Capture photo from mobile camera.
+ Allow gallery upload.
+ Crop and compress image before upload.
+ Attach photo to patient profile.
+ Restrict access to patient photo based on role permission.
+Patient Search and List
+ Search by patient ID, name, mobile number, city, doctor, treatment status, or follow-up date.
+ Filter by recent patients, today patients, pending treatments, missed follow-ups.
+ Open patient profile from search results.
+ Show minimum patient information in list view for privacy.
+Patient Profile
+ View patient summary, photo, age, gender, mobile, medical flags, treatment status, last visit, next follow-up.
+ Access tabs: Overview, Visits, Prescriptions, X-rays, Documents, Reminders, Medical History.
+ Show red flags for allergies, diabetes, blood pressure, heart disease, pregnancy, current medication.
+ Allow edit only for permitted roles.
+Visit Management
+ Create multiple visits per patient.
+ Capture visit date, doctor, chief complaint, pain level, tooth number, diagnosis, treatment advised, treatment done, 
+notes, next follow-up.
+ Link prescription, documents, X-rays, and reminders to a visit.
+ Show chronological visit timeline.
+ Allow doctor notes and assistant notes separately where required.
+X-ray Management
+ Upload X-ray image or PDF.
+ Capture X-ray type: IOPA, OPG, CBCT, Bitewing, Periapical, Other.
+ Capture tooth number, remarks, before/after flag, uploaded by, upload date.
+ View patient-wise X-ray gallery.
+ Open full-screen image viewer with zoom support.
+ Restrict download/share based on role.
+Document Management
+ Upload consent forms, lab reports, old prescriptions, treatment photos, ID proof if required, medical reports, other 
+documents.
+ Classify document type and link to patient and visit.
+ Show upload history with uploaded by and date/time.
+ Allow document preview.
+ Use secure cloud storage with access rules.
+Prescription Creation
+ Create prescription from patient visit.
+--- PAGE 13 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+ Select medicine from medicine master.
+ Add dosage, frequency, duration, food instruction, special instruction, advice, follow-up date.
+ Allow custom medicine only if role permission allows.
+ Preview prescription before saving.
+ Save prescription history per patient.
+ Future: generate/share PDF prescription.
+Medicine Selection in Mobile
+ Search medicines by name, generic name, brand name, or type.
+ Auto-fill default dosage/frequency/duration from master.
+ Allow doctor to edit dosage for patient-specific need.
+ Show active medicines only.
+ Prevent use of inactive/deprecated medicines unless admin allows.
+Reminders and Follow-ups
+ Create follow-up reminder from patient/visit/prescription.
+ Support reminder types: appointment, follow-up, medicine, X-ray review, pending treatment.
+ Show today, overdue, upcoming, completed reminders.
+ Assign reminder to user/doctor.
+ Update status: pending, completed, missed, cancelled.
+Notifications
+ Send push notification for follow-up due, appointment, pending approval, patient assigned, prescription pending, 
+upload success.
+ Show in-app notification center.
+ Allow notification preferences based on role.
+ Future: WhatsApp/SMS reminder integration.
+Offline and Sync Behavior
+ MVP: show network error and prevent unsafe offline writes.
+ Future: support encrypted offline draft capture with sync when online.
+ Avoid storing unencrypted patient medical data locally.
+Settings
+ View app version, privacy policy, terms, logout, support contact.
+ Show clinic details based on user clinic assignment.
+ Allow language preference in future.
+A3. Web Admin Panel - Detailed Functionality
+Admin Login and Access Control
+ Google login for admin users.
+ Only approved admin/super admin roles can access admin panel.
+ Block pending/rejected/suspended users.
+ Route users based on role permissions.
+--- PAGE 14 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+Admin Dashboard
+ Display total patients, new patients today, visits today, follow-ups today, pending follow-ups, prescriptions issued, X-
+rays uploaded, active users, pending approvals.
+ Display charts for monthly patient growth, visit trend, treatment category, medicine usage, follow-up completion, 
+doctor-wise patients.
+ Allow date range filter: today, week, month, quarter, custom.
+ Highlight overdue follow-ups and pending user approvals.
+User Approval Management
+ View pending users after Google login.
+ Approve, reject, suspend, reactivate users.
+ Assign role and clinic during approval.
+ View user access history and last login.
+ Notify user after approval/rejection.
+Role and Permission Management
+ Create custom roles.
+ Edit permissions for add/edit/delete/view patient, medical history access, document upload, X-ray view, prescription 
+creation, medicine master, user approval, analytics, reports, settings.
+ Prevent deletion of system-critical super admin role.
+ Apply role changes immediately after save.
+ Maintain audit log for role changes.
+Patient Management
+ View all patients under clinic.
+ Search/filter by name, mobile, patient ID, city, doctor, treatment status, registration date, follow-up date.
+ Open full patient profile with tabs.
+ Edit patient details with audit log.
+ Soft delete/archive patient record based on permission.
+ Export patient case file in future phase.
+Patient Profile in Admin
+ Show overview, visits, prescriptions, X-rays, documents, reminders, medical history, consent, audit history.
+ Show patient risk flags prominently.
+ Allow quick actions: add visit, create prescription, upload document, create reminder.
+ Provide full timeline view of treatment history.
+Medicine Master
+ Create/edit/deactivate medicines.
+ Fields: medicine name, generic name, brand, type, strength, default dosage, default frequency, default duration, 
+food instruction, special instruction, active status.
+ Search/filter medicine list.
+ Bulk upload medicines in future phase.
+ Maintain audit log for medicine changes.
+--- PAGE 15 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+Prescription Template Master
+ Create common dental prescription templates.
+ Template examples: extraction, root canal, scaling, pain management, infection, mouth ulcer, post-surgery care.
+ Add medicine combinations, advice, follow-up instruction.
+ Mark templates active/inactive.
+ Allow doctors to use templates during prescription creation.
+Document Category Master
+ Maintain document categories: X-ray, prescription, consent, medical report, treatment photo, invoice, other.
+ Mark document category as active/inactive.
+ Control mandatory metadata per document type.
+Consent Management
+ View consent status per patient.
+ View consent text version, date/time, captured by user, signature if available.
+ Download consent copy in future phase.
+ Maintain consent history if re-consent is taken.
+ Mark consent withdrawn/restricted based on clinic policy.
+Analytics Module
+ Patient analytics: total, new, returning, age group, gender, location-wise distribution.
+ Treatment analytics: common complaints, common treatments, completed/pending treatments, doctor-wise 
+treatment count.
+ Prescription analytics: most prescribed medicines, antibiotic usage, painkiller usage, prescription count by doctor.
+ Follow-up analytics: due today, missed, completed, pending, conversion rate.
+ User activity analytics: records added, documents uploaded, prescriptions created, login activity.
+Reports
+ Generate patient report, visit report, prescription report, medicine usage report, follow-up report, user activity 
+report, treatment status report.
+ Filter reports by date range, doctor, treatment status, medicine, user.
+ Export reports in future phase as PDF/Excel based on role permission.
+Audit Logs
+ Capture create/update/delete/view/download actions for sensitive data.
+ Log user, action, entity, date/time, before/after values where applicable, device/IP where possible.
+ Allow admin to filter audit logs by user, patient, action, date range.
+ Protect audit logs from modification/deletion by normal users.
+Clinic Settings
+ Manage clinic name, address, contact, email, logo, working days, doctor details, prescription header/footer.
+ Configure reminder preferences.
+ Configure privacy policy and consent version text.
+ Configure default role assignment policy.
+--- PAGE 16 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+A4. Detailed Master Data List
+Master Purpose Key Fields
+Medicine Master Standardize medicines used in 
+prescriptions.
+Name, generic name, brand, type, 
+strength, dosage, frequency, duration, 
+food instruction, special instruction, active 
+status.
+Prescription Template Master Speed up common dental prescriptions. Template name, diagnosis, medicines, 
+advice, follow-up instruction, active status.
+Document Category Master Classify patient documents. Category name, allowed file types, 
+mandatory fields, active status.
+Role Master Control user access. Role name, permission set, active status.
+Clinic Settings Configure clinic profile and app behavior. Clinic name, address, doctor name, 
+phone, email, logo, working days, 
+reminder settings.
+Consent Version Master Track consent language/version. Version, language, consent text, active 
+date, status.
+Treatment Status Master Standardize treatment stages. Pending, in progress, completed, 
+cancelled, referred.
+X-ray Type Master Standardize X-ray uploads. IOPA, OPG, CBCT, Bitewing, Periapical, 
+Other.
+A5. Role Permission Matrix
+Functionality Super Admin Doctor Receptionist Assistant Viewer
+Approve users Yes No No No No
+Manage roles Yes No No No No
+Add patient Yes Yes Yes Limited No
+Edit patient basic 
+details
+Yes Yes Yes Limited No
+View medical 
+history
+Yes Yes Limited Limited Read-only if 
+allowed
+Create visit notes Yes Yes No Limited No
+Upload 
+X-rays/documents
+Yes Yes Yes Yes No
+Create prescription Yes Yes No No No
+Manage medicine 
+master
+Yes Optional No No No
+View analytics Yes Limited No No No
+Export reports Yes Optional No No No
+View audit logs Yes No No No No
+A6. Detailed Data Capture Checklist
+Record Type Mandatory Data Optional / Future Data
+Patient Name, mobile, gender, age/DOB, consent, 
+created by, clinic ID.
+Email, occupation, alternate mobile, 
+address, city, profile photo.
+Medical History Allergy, diabetes, blood pressure, current 
+medication, heart disease flag.
+Pregnancy, past surgery, 
+tobacco/smoking, detailed medical notes.
+Dental Visit Visit date, complaint, doctor, diagnosis, 
+treatment status.
+Pain level, tooth number, treatment done, 
+treatment advised, next follow-up.
+Prescription Patient, visit, doctor, diagnosis, medicine, 
+dosage, frequency, duration.
+PDF, doctor signature, advice, follow-up 
+date, share history.
+X-ray/Document Patient, document type, file, uploaded by, 
+upload date.
+X-ray type, tooth number, remarks, 
+before/after flag, thumbnail.
+Reminder Patient, reminder type, date/time, status. Assigned user, notification status, 
+completion note.
+Consent Consent status, consent text version, 
+date/time, captured by.
+Signature image, guardian relation, 
+consent PDF, withdrawal record.
+--- PAGE 17 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+A7. Detailed Compliance, Privacy, and Infosec Functionality
+Consent and Notice
+ Collect patient consent before storing medical/dental data.
+ Provide simple consent language in English and optionally Marathi/Hindi.
+ Capture parent/guardian consent for minors.
+ Store consent version and exact consent text.
+ Allow admin to view consent history.
+Access Control
+ Admin approval before access.
+ Role-based permission enforcement in mobile, web, Firestore, and Storage.
+ Clinic-wise data isolation using clinic ID.
+ Pending/rejected/suspended users cannot access patient data.
+ Super admin control for high-risk actions.
+Data Security
+ Secure Firebase Authentication.
+ Firestore Security Rules for all collections.
+ Storage Security Rules for photos, X-rays, prescriptions, and documents.
+ No public unrestricted file URLs.
+ Encrypt sensitive local cache if offline mode is added.
+ Use HTTPS/TLS for all network calls.
+Audit and Monitoring
+ Log sensitive actions: view, create, edit, delete, upload, download, consent, role change.
+ Capture user, timestamp, patient/entity, action, old/new values when possible.
+ Protect audit logs from normal edits.
+ Review failed access attempts and suspicious activity in future phase.
+Google Play Readiness
+ Complete Health Apps declaration.
+ Complete Data Safety form.
+ Publish privacy policy and terms.
+ Disclose medical/health data collection and purpose.
+ Do not make automated diagnosis claims.
+ Provide data deletion/contact process.
+Data Lifecycle
+ Soft delete/archive sensitive records instead of immediate permanent delete.
+ Define retention policy with clinic admin.
+ Allow patient correction/deletion request workflow as per clinic policy.
+ Allow export of patient file in future phase.
+ Backup and recovery plan for clinic data.
+--- PAGE 18 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+A8. MVP Detailed Feature Backlog
+Priority Feature Description
+P0 Google Login Google authentication for mobile and web 
+users.
+P0 Admin Approval New users remain pending until admin 
+approval and role assignment.
+P0 Role-Based Access Restrict features based on user role and 
+permissions.
+P0 Patient Registration Capture patient basic, medical, dental, and 
+consent details.
+P0 Patient Search/Profile Search and view patient profile with history 
+tabs.
+P0 Visit Records Create and maintain visit-wise clinical 
+notes.
+P0 Document/X-ray Upload Upload and view patient documents and 
+X-rays securely.
+P0 Prescription Creation Create prescription using medicine master.
+P0 Medicine Master Admin-managed medicine catalogue.
+P0 Follow-up Reminders Create and track patient follow-up 
+reminders.
+P0 Admin Dashboard Show patients, visits, follow-ups, 
+prescriptions, X-rays, pending users.
+P0 Audit Logs Capture critical actions for accountability.
+P1 Prescription Templates Standard templates for common dental 
+treatments.
+P1 Reports Patient, visit, prescription, follow-up, 
+medicine reports.
+P1 Basic Analytics Patient growth, treatment trend, follow-up 
+status, user activity.
+P2 WhatsApp/SMS External reminder integration after MVP.
+P2 Billing Invoice and payment records after core 
+workflow is stable.
+P2 AI/OCR AI summary and OCR document 
+extraction later.
+A9. UAT Checklist
+Test Area Acceptance Criteria
+Login Approved users can login; pending/rejected users cannot access 
+patient data.
+User Approval Admin can approve, reject, suspend, and assign roles.
+Patient Creation Mandatory fields and consent are required before saving.
+Consent Consent details, version, timestamp, captured user, and signature 
+if applicable are stored.
+Patient Photo Photo can be captured/uploaded and displayed in patient profile.
+X-ray Upload X-ray can be uploaded, categorized, linked to patient and visit, 
+and viewed by permitted users.
+Prescription Doctor can create prescription from medicine master and save it 
+to patient history.
+Reminder Follow-up reminder appears in today/upcoming/overdue list.
+Role Restriction Receptionist/assistant cannot access restricted doctor/admin 
+features.
+Analytics Dashboard counts match underlying records.
+Audit Logs Create/edit/upload/approve actions are logged.
+Security Users cannot access data outside assigned clinic.
+A10. Development Deliverables Checklist
+Deliverable Included Items
+Mobile App Flutter source code, screens, forms, camera/upload, auth, 
+notifications, role checks.
+--- PAGE 19 ---
+DentaVault Project Plan | Confidential planning draft | Page 
+Admin Web App Dashboard, user approval, roles, patients, medicines, analytics, 
+settings.
+Firebase Backend Auth, Firestore schema, Storage, FCM, Cloud Functions, Hosting.
+Security Firestore rules, Storage rules, audit logs, data access restrictions.
+Compliance Privacy policy, terms, consent text, Play Store data safety inputs, 
+health declaration inputs.
+Testing UAT cases, role testing, security testing, upload testing, 
+performance checks.
+Launch Package Build files, deployment instructions, admin guide, clinic user 
+guide.
+End of Detailed Functionality List
