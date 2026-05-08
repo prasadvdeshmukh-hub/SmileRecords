@@ -1,0 +1,9 @@
+run = "npm start"
+modules = ["nodejs-22"]
+
+[deployment]
+build = ["sh", "-c", "npm install && npm run build"]
+run = ["sh", "-c", "npm start"]
+
+[env]
+NODE_ENV = "production"

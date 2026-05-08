@@ -40,8 +40,13 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
 const DRAFT_KEY = 'smileRecordsAssistantDrafts';
+
+function apiUrl(path) {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}${normalizedPath}`;
+}
 
 function useApi(path, refreshKey = 0) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
@@ -49,7 +54,7 @@ function useApi(path, refreshKey = 0) {
   useEffect(() => {
     let active = true;
     setState({ loading: true, data: null, error: null });
-    fetch(`${API_URL}${path}`)
+    fetch(apiUrl(path))
       .then((response) => {
         if (!response.ok) throw new Error(`API ${response.status}`);
         return response.json();
@@ -65,11 +70,18 @@ function useApi(path, refreshKey = 0) {
 }
 
 async function apiPost(path, body, method = 'POST') {
-  const response = await fetch(`${API_URL}${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } catch {
+    const error = new Error('Network unavailable. Check that the backend API is running.');
+    error.isNetworkError = true;
+    throw error;
+  }
   if (!response.ok) {
     let detail = `API ${response.status}`;
     try {
@@ -328,7 +340,7 @@ function AssistantIntake() {
       } else {
         saveDraft(payload);
         setDrafts(readDrafts());
-        setMessage('Network unavailable. Saved offline draft on this device.');
+        setMessage(`${error.message || 'Network unavailable.'} Saved offline draft on this device.`);
       }
     }
   };
@@ -363,7 +375,7 @@ function AssistantIntake() {
       return;
     }
     try {
-      const response = await fetch(`${API_URL}/patients/lookup?mobile=${encodeURIComponent(mobile)}`);
+      const response = await fetch(apiUrl(`/patients/lookup?mobile=${encodeURIComponent(mobile)}`));
       const payload = await response.json();
       setReturningPatient(payload.patient);
     } catch {
@@ -1010,7 +1022,7 @@ function TestMasterAdmin() {
   };
 
   const deleteTest = async (id) => {
-    await fetch(`${API_URL}/tests/${id}`, { method: 'DELETE' });
+    await fetch(apiUrl(`/tests/${id}`), { method: 'DELETE' });
     setRefresh((value) => value + 1);
   };
 
