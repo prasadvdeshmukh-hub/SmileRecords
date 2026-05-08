@@ -19,6 +19,19 @@ Admin web panel: `http://localhost:5173/admin`
 
 API: `http://localhost:4000/api`
 
+## Deploy To Render
+
+The repository includes `render.yaml` for one-service deployment. Render builds the React app, starts the Express backend, serves `/api/*`, and serves the React app from the same public URL.
+
+Deploy link:
+
+https://render.com/deploy?repo=https://github.com/prasadvdeshmukh-hub/SmileRecords
+
+After Render finishes deployment, open:
+
+- App login: `https://YOUR-RENDER-SERVICE.onrender.com/login`
+- API health: `https://YOUR-RENDER-SERVICE.onrender.com/api/health`
+
 ## Backend
 
 The backend is an Express API with JSON-file persistence. On first run it creates:

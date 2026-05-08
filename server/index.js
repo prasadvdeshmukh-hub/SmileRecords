@@ -558,6 +558,14 @@ app.get('/api/analytics', (req, res) => {
   });
 });
 
+const clientDistPath = join(__dirname, '..', 'dist');
+if (existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+  app.get(/^(?!\/api).*/, (req, res) => {
+    res.sendFile(join(clientDistPath, 'index.html'));
+  });
+}
+
 function normalizePatient(patient) {
   return {
     name: patient.name || '',
