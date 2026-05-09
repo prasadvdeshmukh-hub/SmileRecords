@@ -617,11 +617,11 @@ td span {
 
 .mobile-header-logo {
   display: block;
-  height: 82px;
-  max-width: min(245px, calc(100vw - 185px));
+  height: 88px;
+  max-width: min(262px, calc(100vw - 174px));
   object-fit: contain;
   object-position: left center;
-  transform: translateY(-4px);
+  transform: translateY(-7px);
   width: 100%;
 }
 
@@ -779,7 +779,7 @@ td span {
 }
 
 .mobile-title {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   gap: 12px;
   justify-content: space-between;
@@ -2591,7 +2591,7 @@ button.date-selector {
   box-shadow: 0 -16px 34px rgba(15, 23, 42, 0.09);
   display: grid;
   gap: 6px;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   left: 50%;
   max-width: 760px;
   padding: 8px;
@@ -3826,6 +3826,76 @@ td span {
   width: 20px;
 }
 
+/* Mobile type scale: keep panels/buttons compact while making text consistent. */
+.mobile-app,
+.mobile-app button,
+.mobile-app input,
+.mobile-app select,
+.mobile-app textarea {
+  font-family: "Segoe UI", "Segoe UI Variable", system-ui, -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+}
+
+.mobile-title h2 {
+  font-size: 23px;
+  font-weight: 850;
+}
+
+.mobile-section h3,
+.summary-card h3,
+.sheet-header strong,
+.doctor-select-panel > strong,
+.today-dashboard header strong {
+  font-size: 17px;
+}
+
+.mobile-app p,
+.mobile-app span,
+.mobile-app small,
+.mobile-app dd,
+.mobile-app dt,
+.mobile-app li,
+.field input,
+.field select,
+.field textarea,
+.new-patient-sheet .field input,
+.new-patient-sheet .field select,
+.assistant-basic-compact .field input,
+.assistant-basic-compact .field select {
+  font-size: 14px;
+}
+
+.field span,
+.check span,
+.new-patient-sheet .field span,
+.assistant-basic-compact .field span,
+.quick-intake .field span,
+.doctor-select-panel .field span,
+.dose-controls span {
+  font-size: 14px;
+}
+
+.appointment-name,
+.case-card strong,
+.data-row strong,
+.approval-card strong,
+.mapping-row strong,
+.fees-queue-row strong {
+  font-size: 15px;
+}
+
+.status,
+.appointment-send-cell .status,
+.today-status-tile span,
+.date-selector small,
+.mobile-menu-link,
+.assistant-bottom-dock button {
+  font-size: 12px;
+}
+
+.today-status-tile strong {
+  font-size: 19px;
+}
+
 .complete-visit-button {
   align-items: center;
   background: #0b7a5c;
@@ -4071,7 +4141,7 @@ td span {
   .mobile-title {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
+    align-items: center;
     gap: 8px;
   }
 

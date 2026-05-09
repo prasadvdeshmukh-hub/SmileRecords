@@ -34,7 +34,7 @@ After Render finishes deployment, open:
 
 ## Backend Storage
 
-The backend is an Express API with Firebase Firestore support. If Firebase credentials are configured, `/api/health` shows `storage: "firestore"` and all app data is saved into one Firestore document. If Firebase is not configured, the app falls back to JSON-file persistence for local testing.
+The backend is an Express API with Firebase Firestore support. If Firebase credentials are configured, `/api/health` shows `storage: "firestore"` and all app data is saved into one Firestore document. Render/production requires Firebase and will not fall back to local JSON storage.
 
 ### Firebase Free Database Setup
 
@@ -61,7 +61,18 @@ Optional:
 ```text
 FIREBASE_COLLECTION=smileRecords
 FIREBASE_DOCUMENT=appState
+FIREBASE_BACKUP_COLLECTION=smileRecordsBackups
 ```
+
+For an existing live app, keep `FIREBASE_COLLECTION` and `FIREBASE_DOCUMENT` unchanged across every Render deployment. If either value changes, the app will look at a different Firestore document and the old records will not appear.
+
+On Render, the app will not automatically create a new seed Firestore document. For first-time setup only, set:
+
+```text
+ALLOW_FIRESTORE_INITIALIZE=true
+```
+
+Deploy once, confirm `/api/health` shows `storage: "firestore"`, then remove `ALLOW_FIRESTORE_INITIALIZE` so future typos cannot silently create a fresh empty dataset.
 
 After deployment, open `/api/health`. It should show:
 
@@ -72,14 +83,45 @@ After deployment, open `/api/health`. It should show:
 }
 ```
 
-Without Firebase variables, local fallback creates:
+Use the same Firebase variables locally if you want local and Render to use the same central repository. Without Firebase variables, local fallback creates:
 
 `server/data/smile-records.local.json`
 
-That file is ignored by git so local test data does not get committed. To reset local data back to the seeded demo records:
+That file is ignored by git so local test data does not get committed.
+
+### Reset and Smoke Test Safety
+
+Never run smoke tests against the shared Firestore document. The smoke test resets data by design, so start the API with isolated JSON-file storage:
 
 ```powershell
-Invoke-RestMethod -Method Post http://localhost:4000/api/admin/reset-data -ContentType 'application/json' -Body '{}'
+$env:SMILE_RECORDS_STORAGE='json-file'
+$env:SMILE_RECORDS_DATA_FILE='D:\SmileRecords\server\data\smoke-test.local.json'
+$env:ALLOW_DATA_RESET='true'
+npm start
+```
+
+Then in another terminal:
+
+```powershell
+$env:API_URL='http://127.0.0.1:4000/api'
+npm run test:api
+```
+
+The reset endpoint is disabled by default for Firestore-backed or deployed environments. To perform an intentional one-time Firestore reset, both values are required:
+
+```text
+ALLOW_DATA_RESET=true
+DATA_RESET_CONFIRMATION=<strong one-time token>
+```
+
+The request body must include the same confirmation token. Remove these variables immediately after the reset.
+
+To reset only isolated local JSON test data back to the seeded demo records:
+
+```powershell
+$env:ALLOW_DATA_RESET='true'
+Invoke-RestMethod -Method Post http://localhost:4000/api/admin/reset-data -ContentType 'application/json' -Body '{"actor":"Local Test"}'
+Remove-Item Env:ALLOW_DATA_RESET
 ```
 
 Useful backend commands:
@@ -91,7 +133,7 @@ npm run test:api
 
 Health check: `http://localhost:4000/api/health`
 
-Backend smoke test flow:
+Backend smoke test flow, only on isolated JSON storage:
 
 - Reset seed data
 - Create a new assistant intake case

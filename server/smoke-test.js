@@ -47,10 +47,16 @@ async function run() {
   const today = new Date().toISOString().slice(0, 10);
   const health = await request('/health');
   assert(health.ok, 'Health check failed');
+  if (health.storage === 'firestore' && process.env.SMOKE_TEST_ALLOW_FIRESTORE_RESET !== 'true') {
+    throw new Error('Refusing to run smoke test against Firestore. Start the API with SMILE_RECORDS_STORAGE=json-file and an isolated SMILE_RECORDS_DATA_FILE.');
+  }
 
   await request('/admin/reset-data', {
     method: 'POST',
-    body: JSON.stringify({ actor: 'Smoke Test' })
+    body: JSON.stringify({
+      actor: 'Smoke Test',
+      confirmation: process.env.DATA_RESET_CONFIRMATION || ''
+    })
   });
 
   const assistantLogin = await request('/auth/login', {

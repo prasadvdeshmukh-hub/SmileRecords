@@ -15,6 +15,7 @@ const port = process.env.PORT || 4000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = process.env.SMILE_RECORDS_DATA_FILE || join(__dirname, 'data', 'smile-records.local.json');
 const IS_DEPLOYED_RUNTIME = process.env.RENDER || process.env.NODE_ENV === 'production';
+const STORAGE_MODE = process.env.SMILE_RECORDS_STORAGE || '';
 const storage = createStorage();
 let db = await loadDb();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -35,9 +36,9 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/admin/reset-data', (req, res) => {
-  if ((IS_DEPLOYED_RUNTIME || storage.mode === 'firestore') && process.env.ALLOW_DATA_RESET !== 'true') {
+  if (!isDataResetAllowed(req)) {
     return res.status(403).json({
-      error: 'Data reset is disabled for deployed or Firestore-backed environments. Set ALLOW_DATA_RESET=true only for an intentional one-time reset.'
+      error: 'Data reset is disabled. Use an isolated local test database, or provide the explicit reset confirmation token for an intentional one-time reset.'
     });
   }
   db = prepareDb(seed);
@@ -1389,6 +1390,13 @@ function describeAuditEvent(action, entity) {
 }
 
 function createStorage() {
+  if (STORAGE_MODE === 'json-file') {
+    if (IS_DEPLOYED_RUNTIME) {
+      throw new Error('JSON file storage is not allowed in deployed environments. Configure Firebase for Render.');
+    }
+    return createJsonFileStorage();
+  }
+
   const firebaseCredential = parseFirebaseCredential();
   if (firebaseCredential) {
     if (!getApps().length) {
@@ -1397,15 +1405,24 @@ function createStorage() {
     const firestore = getFirestore();
     const collection = process.env.FIREBASE_COLLECTION || 'smileRecords';
     const document = process.env.FIREBASE_DOCUMENT || 'appState';
+    const backupCollection = process.env.FIREBASE_BACKUP_COLLECTION || `${collection}Backups`;
+    const docRef = firestore.collection(collection).doc(document);
     return {
       mode: 'firestore',
       documentPath: `${collection}/${document}`,
       async load() {
-        const snapshot = await firestore.collection(collection).doc(document).get();
+        const snapshot = await docRef.get();
         if (!snapshot.exists) {
-          const initial = prepareDb(seed);
-          await firestore.collection(collection).doc(document).set({
+          if (IS_DEPLOYED_RUNTIME && process.env.ALLOW_FIRESTORE_INITIALIZE !== 'true') {
+            throw new Error(
+              `Firestore document ${collection}/${document} does not exist. Check FIREBASE_COLLECTION/FIREBASE_DOCUMENT, or set ALLOW_FIRESTORE_INITIALIZE=true once for first-time setup.`
+            );
+          }
+          const localData = loadJsonDbIfExists();
+          const initial = prepareDb(localData || seed);
+          await docRef.set({
             data: initial,
+            storageSource: localData ? 'local-json-migration' : 'seed',
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           });
@@ -1414,20 +1431,39 @@ function createStorage() {
         return prepareDb(snapshot.data()?.data || {});
       },
       async save(value) {
-        await firestore.collection(collection).doc(document).set({
-          data: clone(value),
+        const nextValue = clone(value);
+        const snapshot = await docRef.get();
+        const currentValue = snapshot.exists ? snapshot.data()?.data : null;
+        if (shouldBackupBeforeSave(currentValue, nextValue)) {
+          await firestore.collection(backupCollection).doc(`${document}-${Date.now()}`).set({
+            sourceDocument: `${collection}/${document}`,
+            reason: backupReason(currentValue, nextValue),
+            createdAt: new Date().toISOString(),
+            counts: {
+              before: dataCounts(currentValue),
+              after: dataCounts(nextValue)
+            },
+            data: clone(currentValue)
+          });
+        }
+        await docRef.set({
+          data: nextValue,
           updatedAt: new Date().toISOString()
         }, { merge: true });
       }
     };
   }
 
-  if (IS_DEPLOYED_RUNTIME) {
+  if (IS_DEPLOYED_RUNTIME || STORAGE_MODE === 'firestore') {
     throw new Error(
       'Firebase is required in deployed environments. Configure FIREBASE_SERVICE_ACCOUNT_BASE64 or FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY.'
     );
   }
 
+  return createJsonFileStorage();
+}
+
+function createJsonFileStorage() {
   return {
     mode: 'json-file',
     documentPath: DATA_FILE,
@@ -1489,6 +1525,16 @@ function loadJsonDb() {
   }
 }
 
+function loadJsonDbIfExists() {
+  if (!existsSync(DATA_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(DATA_FILE, 'utf8'));
+  } catch (error) {
+    console.warn(`Could not read local SmileRecords data for Firestore migration: ${error.message}`);
+    return null;
+  }
+}
+
 function prepareDb(value) {
   const merged = { ...clone(seed), ...clone(value || {}) };
   merged.audit = normalizeAuditRecords(merged.audit || []);
@@ -1521,6 +1567,40 @@ function normalizeAuditRecords(records) {
 
 function saveDb() {
   return storage.save(db);
+}
+
+function isDataResetAllowed(req) {
+  if (process.env.ALLOW_DATA_RESET !== 'true') return false;
+  if (storage.mode === 'json-file' && !IS_DEPLOYED_RUNTIME) return true;
+  const token = process.env.DATA_RESET_CONFIRMATION || '';
+  return Boolean(token && req.body?.confirmation === token);
+}
+
+function dataCounts(value = {}) {
+  return {
+    cases: value?.cases?.length || 0,
+    patients: value?.patients?.length || 0,
+    users: value?.users?.length || 0,
+    appointments: value?.appointments?.length || 0,
+    audit: value?.audit?.length || 0
+  };
+}
+
+function totalStoredRecords(value = {}) {
+  const counts = dataCounts(value);
+  return Object.values(counts).reduce((sum, count) => sum + count, 0);
+}
+
+function shouldBackupBeforeSave(currentValue, nextValue) {
+  if (!currentValue) return false;
+  return totalStoredRecords(nextValue) < totalStoredRecords(currentValue);
+}
+
+function backupReason(currentValue, nextValue) {
+  const before = dataCounts(currentValue);
+  const after = dataCounts(nextValue);
+  const reduced = Object.keys(before).filter((key) => after[key] < before[key]);
+  return reduced.length ? `record-count-drop:${reduced.join(',')}` : 'pre-save-safety';
 }
 
 function persistSuccessfulMutations(req, res, next) {

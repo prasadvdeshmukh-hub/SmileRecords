@@ -1610,7 +1610,7 @@ function MobileAnalytics({ role }) {
     { label: 'Audit Events', value: metricValue('Audit Events') }
   ];
   return (
-    <MobilePage title="Dashboard" subtitle="Assistant and Doctor live clinic dashboard.">
+    <MobilePage title="Dashboard">
       <section className="mobile-section">
         <h3>Assistant Dashboard</h3>
         <div className="mobile-analytics-grid">
@@ -1753,10 +1753,6 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
         <ReceiptIndianRupee size={18} />
         {feesPendingCount > 0 && <span className="dock-tab-badge">{feesPendingCount}</span>}
         <span>Fees</span>
-      </button>
-      <button type="button" onClick={() => navigate('/assistant/dashboard')}>
-        <Gauge size={18} />
-        <span>Dashboard</span>
       </button>
       <button
         type="button"
