@@ -175,6 +175,14 @@ async function run() {
   });
   assert(duplicateAllowed.case.patientId !== intake.case.patientId, 'Confirmed duplicate mobile should create a second patient record');
 
+  const multiLookup = await request('/patients/lookup?mobile=9123456780&hospitalId=HOSP-1');
+  assert(multiLookup.patients.length >= 2, 'Lookup should return all same-mobile patient records');
+  assert(Array.isArray(multiLookup.patients[0].historyDays), 'Lookup should include day-wise patient history');
+  const fullPatientLookup = await request(`/patients/${intake.case.patientId}`);
+  assert(fullPatientLookup.patient.age === '38', 'Full patient lookup should return saved age');
+  assert(fullPatientLookup.patient.gender === 'Female', 'Full patient lookup should return saved gender');
+  assert(fullPatientLookup.patient.address === 'Test Address', 'Full patient lookup should return saved address');
+
   const matchedExisting = await request('/cases', {
     method: 'POST',
     body: JSON.stringify({
@@ -195,6 +203,7 @@ async function run() {
     })
   });
   assert(matchedExisting.case.patientId === intake.case.patientId, 'Confirmed existing mobile should reuse selected patient');
+  assert(Array.isArray(matchedExisting.case.patient.historyDays), 'Created case should include linked day-wise patient history');
 
   const assistantIntakeBeforeSend = await request('/cases?queue=assistant-intake&doctorId=U-6');
   assert(assistantIntakeBeforeSend.cases.some((item) => item.id === caseId), 'New case should remain in assistant queue before send');

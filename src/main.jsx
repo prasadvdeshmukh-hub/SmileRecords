@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -63,6 +63,13 @@ function getGreeting() {
   if (hour < 12) return 'Good morning';
   if (hour < 17) return 'Good afternoon';
   return 'Good evening';
+}
+
+function displayUserName(user, fallback = 'User') {
+  const name = String(user?.name || '').trim();
+  if (name) return name;
+  const emailName = String(user?.email || '').split('@')[0].trim();
+  return emailName || fallback;
 }
 
 function getStoredUser() {
@@ -174,7 +181,8 @@ function App() {
 
         <Route path="/admin" element={<RequireAuth allowedRoles={['Super Admin']}><AdminShell /></RequireAuth>}>
           <Route index element={<AdminDashboard />} />
-          <Route path="patients" element={<AdminListing title="Patients" endpoint="/patients" icon={Users} />} />
+          <Route path="patients" element={<AdminPatients />} />
+          <Route path="patients/:patientId" element={<AdminPatientDetails />} />
           <Route path="cases" element={<AdminListing title="All Cases" endpoint="/cases" icon={ClipboardList} />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="hospitals" element={<HospitalMasterAdmin />} />
@@ -456,7 +464,7 @@ function ProfileWelcome({ role }) {
   return (
     <section className="profile-welcome">
       <div>
-        <strong>{getGreeting()}, {currentUser?.name || copy.name}</strong>
+        <strong>{getGreeting()}, {displayUserName(currentUser, copy.name)}</strong>
         <span>{copy.greeting}</span>
       </div>
     </section>
@@ -500,7 +508,11 @@ function AssistantIntake() {
   const navigate = useNavigate();
   const bookedTimes = useMemo(() => new Set((appointmentData?.appointments || []).map((item) => item.time)), [appointmentData]);
   const [returningPatient, setReturningPatient] = useState(null);
+  const [lookupPatients, setLookupPatients] = useState([]);
+  const [lookupOpen, setLookupOpen] = useState(false);
   const [mobileDecision, setMobileDecision] = useState('');
+  const [patientDraft, setPatientDraft] = useState(emptyPatientDraft());
+  const intakeFormRef = useRef(null);
 
   useEffect(() => {
     if (!selectedDoctorId && doctorOptions.length) {
@@ -530,8 +542,9 @@ function AssistantIntake() {
     event.preventDefault();
     const form = event.currentTarget;
     const payload = formToPatient(form);
-    if (returningPatient && !mobileDecision) {
-      setMessage(`Mobile number already exists. Confirm whether this patient is ${returningPatient.name}.`);
+    if (lookupPatients.length && !mobileDecision) {
+      setLookupOpen(true);
+      setMessage('Select an existing patient or choose Create New before submitting.');
       return;
     }
     if (effectiveDoctorId) payload.doctorId = effectiveDoctorId;
@@ -554,7 +567,10 @@ function AssistantIntake() {
     setMessage(`No. ${result.case.queueNumber} submitted to doctor queue.`);
     form.reset();
     setReturningPatient(null);
+    setLookupPatients([]);
+    setLookupOpen(false);
     setMobileDecision('');
+    setPatientDraft(emptyPatientDraft());
     setMode('appointments');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
@@ -590,15 +606,67 @@ function AssistantIntake() {
     setMobileDecision('');
     if (mobile.length < 10 || !activeHospitalId) {
       setReturningPatient(null);
+      setLookupPatients([]);
+      setLookupOpen(false);
       return;
     }
     try {
       const response = await fetch(apiUrl(`/patients/lookup?mobile=${encodeURIComponent(mobile)}&hospitalId=${encodeURIComponent(activeHospitalId)}`));
       const payload = await response.json();
-      setReturningPatient(payload.patient);
+      const matches = payload.patients || (payload.patient ? [payload.patient] : []);
+      setLookupPatients(matches);
+      setReturningPatient(null);
+      setLookupOpen(matches.length > 0);
     } catch {
       setReturningPatient(null);
+      setLookupPatients([]);
+      setLookupOpen(false);
+      setPatientDraft((current) => ({ ...current, mobile }));
     }
+  };
+
+  const updatePatientDraft = (name) => (event) => {
+    const value = event.target.value;
+    setPatientDraft((current) => ({ ...current, [name]: value }));
+    if (name === 'mobile') {
+      setMobileDecision('');
+      setReturningPatient(null);
+      setLookupPatients([]);
+      setLookupOpen(false);
+    }
+  };
+
+  const handleMobileBlur = async (event) => {
+    const mobile = event.target.value.trim();
+    setPatientDraft((current) => ({ ...current, mobile }));
+    await lookupPatient(event);
+  };
+
+  const useExistingPatient = async (patient) => {
+    try {
+      const response = await fetch(apiUrl(`/patients/${patient.id}`));
+      const payload = await response.json();
+      const fullPatient = { ...patient, ...(payload.patient || {}) };
+      setReturningPatient(fullPatient);
+      setMobileDecision('use-existing');
+      setLookupOpen(false);
+      setPatientDraft(patientToDraft(fullPatient));
+      setMessage(`Using existing patient ${fullPatient.name}. Previous history will stay linked to this case.`);
+    } catch {
+      setReturningPatient(patient);
+      setMobileDecision('use-existing');
+      setLookupOpen(false);
+      setPatientDraft(patientToDraft(patient));
+      setMessage(`Using existing patient ${patient.name}. Previous history will stay linked to this case.`);
+    }
+  };
+
+  const createNewPatientForMobile = () => {
+    setReturningPatient(lookupPatients[0] || null);
+    setMobileDecision('new-record');
+    setPatientDraft((current) => ({ ...emptyPatientDraft(), mobile: current.mobile }));
+    setLookupOpen(false);
+    setMessage('Create new patient record for this mobile number.');
   };
 
   return (
@@ -611,7 +679,7 @@ function AssistantIntake() {
     >
       {message && <div className="notice">{message}</div>}
       {mode === 'new' ? (
-        <form className="new-patient-sheet" onSubmit={submitPatient}>
+        <form className="new-patient-sheet" onSubmit={submitPatient} ref={intakeFormRef}>
           {doctorOptions.length > 0 && (
             <div className="doctor-select-panel">
               <strong>Select Doctor</strong>
@@ -639,48 +707,46 @@ function AssistantIntake() {
             <strong>Patient Details</strong>
             <button type="button" onClick={() => setMode('appointments')}>Close</button>
           </div>
-          <Input name="mobile" label="Mobile" required onBlur={lookupPatient} onChange={lookupPatient} />
-          {returningPatient && (
+          <Input name="mobile" label="Mobile" controlledValue={patientDraft.mobile} required onBlur={handleMobileBlur} onChange={updatePatientDraft('mobile')} />
+          {lookupPatients.length > 0 && mobileDecision && (
             <div className="returning-patient-note duplicate-check">
-              <strong>Mobile number already exists</strong>
-              <span>Is this patient {returningPatient.name}? Last visit: {returningPatient.lastVisitDate || 'Not available'}</span>
+              <strong>{mobileDecision === 'use-existing' ? 'Existing patient selected' : 'New patient record selected'}</strong>
+              <span>
+                {mobileDecision === 'use-existing'
+                  ? `${returningPatient?.name || 'Patient'} history will be linked day-wise.`
+                  : 'Fresh patient details will be saved with the same mobile number.'}
+              </span>
               <div className="dedupe-actions">
-                <button
-                  type="button"
-                  className={mobileDecision === 'use-existing' ? 'active' : ''}
-                  onClick={(event) => {
-                    setMobileDecision('use-existing');
-                    const form = event.currentTarget.closest('form');
-                    if (form?.elements?.name) form.elements.name.value = returningPatient.name || '';
-                  }}
-                >
-                  Yes, use this
-                </button>
-                <button
-                  type="button"
-                  className={mobileDecision === 'new-record' ? 'active' : ''}
-                  onClick={() => setMobileDecision('new-record')}
-                >
-                  No, new name
-                </button>
+                <button type="button" onClick={() => setLookupOpen(true)}>Review Matches</button>
+                <button type="button" onClick={createNewPatientForMobile}>Create New</button>
               </div>
             </div>
           )}
-          <Input name="name" label="Name" required />
-          <Input name="age" label="Age" required />
-          <SelectInput name="gender" label="Gender" options={GENDER_OPTIONS} required />
-          <Input name="address" label="Address" wide />
-          <Input name="chiefComplaint" label="Complaint" required />
+          <Input name="name" label="Name" controlledValue={patientDraft.name} onChange={updatePatientDraft('name')} required />
+          <Input name="age" label="Age" controlledValue={patientDraft.age} onChange={updatePatientDraft('age')} required />
+          <SelectInput name="gender" label="Gender" controlledValue={patientDraft.gender} onChange={updatePatientDraft('gender')} options={GENDER_OPTIONS} required />
+          <Input name="address" label="Address" controlledValue={patientDraft.address} onChange={updatePatientDraft('address')} wide required />
+          <Input name="chiefComplaint" label="Complaint" controlledValue={patientDraft.chiefComplaint} onChange={updatePatientDraft('chiefComplaint')} required />
           <TimeSlotSelect name="appointmentTime" label="Time" bookedTimes={bookedTimes} required />
-          <Input name="toothNumber" label="Tooth" />
-          <Input name="medicalFlags" label="Flags" placeholder="BP, allergy" />
+          <Input name="toothNumber" label="Tooth" controlledValue={patientDraft.toothNumber} onChange={updatePatientDraft('toothNumber')} />
+          <Input name="medicalFlags" label="Flags" controlledValue={patientDraft.medicalFlags} onChange={updatePatientDraft('medicalFlags')} placeholder="BP, allergy" />
           <input type="hidden" name="hospitalId" value={activeHospitalId} />
           <input type="hidden" name="appointmentDate" value={selectedDate} />
+          <input type="hidden" name="assistantId" value={currentUser?.id || ''} />
+          <input type="hidden" name="assistantName" value={displayUserName(currentUser, 'Assistant')} />
           <input type="hidden" name="consent" value="on" />
           <div className="sheet-actions">
             <button className="primary-button" type="submit"><Send size={16} />Submit</button>
             <button className="secondary-button" type="button" onClick={() => setMode('appointments')}>Close</button>
           </div>
+          {lookupOpen && (
+            <PatientLookupModal
+              patients={lookupPatients}
+              onUseExisting={(patient) => useExistingPatient(patient)}
+              onCreateNew={createNewPatientForMobile}
+              onClose={() => setLookupOpen(false)}
+            />
+          )}
             </>
           )}
         </form>
@@ -716,6 +782,67 @@ function DoctorRadioSelector({ doctors = [], selectedDoctorId, onChange }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function PatientLookupModal({ patients, onUseExisting, onCreateNew, onClose }) {
+  return (
+    <div className="patient-lookup-overlay" role="dialog" aria-modal="true">
+      <div className="patient-lookup-modal">
+        <header>
+          <div>
+            <strong>Existing patient found</strong>
+            <span>{patients.length} record(s) mapped to this mobile number</span>
+          </div>
+          <button type="button" onClick={onClose}>Close</button>
+        </header>
+        <div className="patient-match-list">
+          {patients.map((patient) => (
+            <article className="patient-match-card" key={patient.id}>
+              <div className="patient-match-main">
+                <div>
+                  <strong>{patient.name}</strong>
+                  <span>{patient.mobile} | {patient.age || '-'} | {patient.gender || '-'}</span>
+                  <small>{patient.address || patient.city || 'No address saved'}</small>
+                </div>
+                <button type="button" onClick={(event) => onUseExisting(patient, event)}>Use Existing</button>
+              </div>
+              <div className="patient-match-details">
+                <div><span>Last visit</span><strong>{patient.lastVisitDate || 'Not available'}</strong></div>
+                <div><span>Status</span><strong>{patient.treatmentStatus || 'Not available'}</strong></div>
+                <div><span>Tooth</span><strong>{patient.toothNumber || '-'}</strong></div>
+                <div><span>Flags</span><strong>{patient.medicalFlags?.join(', ') || 'None'}</strong></div>
+              </div>
+              <PatientHistoryDays historyDays={patient.historyDays || []} compact />
+            </article>
+          ))}
+        </div>
+        <button className="secondary-button patient-create-new" type="button" onClick={onCreateNew}>
+          <UserRoundPlus size={17} />Create New Patient With Same Mobile
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PatientHistoryDays({ historyDays = [], compact = false }) {
+  if (!historyDays.length) return <p className="muted history-empty">No previous history available.</p>;
+  return (
+    <div className={compact ? 'patient-history-days compact' : 'patient-history-days'}>
+      {historyDays.map((day) => (
+        <section className="patient-history-day" key={day.date}>
+          <time>{day.date}</time>
+          <div>
+            {(day.items || []).map((entry, index) => (
+              <article className="patient-history-entry" key={`${day.date}-${entry.title}-${index}`}>
+                <strong>{entry.title}</strong>
+                {entry.note && <span>{entry.note}</span>}
+              </article>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -912,9 +1039,11 @@ function AssistantDoctorDoneQueue() {
 
 function DoctorAssistantMapping() {
   const currentUser = getStoredUser();
+  const navigate = useNavigate();
   const [refresh, setRefresh] = useState(0);
   const [message, setMessage] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
+  const [pendingMapping, setPendingMapping] = useState(null);
   const { data, loading, error } = useApi(`/doctor-assistant-mappings?doctorEmail=${encodeURIComponent(currentUser?.email || '')}`, refresh);
 
   useEffect(() => {
@@ -929,23 +1058,46 @@ function DoctorAssistantMapping() {
     ));
   };
 
-  const saveMapping = async () => {
-    await apiPost('/doctor-assistant-mappings', {
-      doctorEmail: currentUser?.email,
-      assistantIds: selectedIds
-    });
-    setMessage('Assistant mapping saved.');
-    setRefresh((value) => value + 1);
+  const saveMapping = async (confirmed = false) => {
+    const previousIds = data?.mappedAssistantIds || [];
+    const added = selectedIds.filter((id) => !previousIds.includes(id));
+    const removed = previousIds.filter((id) => !selectedIds.includes(id));
+    if (!confirmed && (added.length || removed.length)) {
+      setPendingMapping({ added, removed });
+      return;
+    }
+    setPendingMapping(null);
+    try {
+      await apiPost('/doctor-assistant-mappings', {
+        doctorEmail: currentUser?.email,
+        assistantIds: selectedIds
+      });
+      const parts = [];
+      if (added.length) parts.push(`${added.length} assistant(s) mapped`);
+      if (removed.length) parts.push(`${removed.length} assistant(s) unmapped`);
+      setMessage(parts.length ? `${parts.join(' and ')} successfully.` : 'Assistant mapping saved.');
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
 
   return (
-    <MobilePage title="Assistant Mapping" subtitle="Select assistants from your mapped hospital only.">
+    <MobilePage
+      title="Assistant Mapping"
+      subtitle="Select assistants from your mapped hospital only."
+      action={<button className="page-close-button" type="button" onClick={() => navigate('/doctor/queue')}>Close</button>}
+    >
       {message && <div className="notice">{message}</div>}
       {loading && <p className="muted">Loading hospital assistants...</p>}
       {error && <p className="error-text">Unable to load assistant mapping: {error.message}</p>}
       {data && (
         <>
-          <QueueInsight title="Hospital" value={data.hospital?.name || 'Not mapped'} helper={`${data.assistants?.length || 0} active assistant(s) available`} />
+          <div className="mapping-hospital-pill">
+            <span>Hospital</span>
+            <strong>{data.hospital?.name || 'Not mapped'}</strong>
+            <small>{data.assistants?.length || 0} active assistant(s) available</small>
+          </div>
           <section className="mobile-section">
             <h3>Mapped Assistants</h3>
             <div className="mapping-list">
@@ -964,10 +1116,26 @@ function DoctorAssistantMapping() {
                 </label>
               ))}
             </div>
-            <button className="primary-button" type="button" onClick={saveMapping}>
+            <button className="primary-button" type="button" onClick={() => saveMapping(false)}>
               <Save size={17} />Save Mapping
             </button>
           </section>
+          {pendingMapping && (
+            <div className="confirm-overlay" role="dialog" aria-modal="true">
+              <div className="confirm-card">
+                <strong>Confirm assistant mapping</strong>
+                <p>
+                  {pendingMapping.removed.length
+                    ? 'You are unmapping an assistant. Open patient work must be completed or cancelled before the system allows unmapping.'
+                    : 'Confirm assistant mapping changes for this doctor.'}
+                </p>
+                <div>
+                  <button type="button" onClick={() => setPendingMapping(null)}>Cancel</button>
+                  <button type="button" onClick={() => saveMapping(true)}>Confirm</button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </MobilePage>
@@ -1159,7 +1327,11 @@ function AssistantCase() {
   if (loading || !item) return <MobilePage title="Case"><p className="muted">Loading case...</p></MobilePage>;
 
   return (
-    <MobilePage title={item.patient.name} subtitle={`${item.id} - ${formatStatus(item.status)}`}>
+    <MobilePage
+      title={item.patient.name}
+      subtitle={`${item.id} - ${formatStatus(item.status)}`}
+      action={<button className="page-close-button" type="button" onClick={() => navigate(-1)}>Close</button>}
+    >
       {message && <div className="notice">{message}</div>}
       {completionNotice && <div className="notice completion-notice"><CheckCircle2 size={18} />{completionNotice}</div>}
       {assistantEditLocked && (
@@ -1822,7 +1994,7 @@ function AdminShell() {
       <main className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">{getGreeting()}, {currentUser?.name || 'Admin'}</p>
+            <p className="eyebrow">{getGreeting()}, {displayUserName(currentUser, 'Admin')}</p>
             <h1>Admin Panel</h1>
           </div>
           <div className="top-actions">
@@ -1833,7 +2005,7 @@ function AdminShell() {
               {pendingCount > 0 && <span className="notification-count">{pendingCount}</span>}
             </NavLink>
             <button className="secondary-button compact-action" type="button" onClick={logout}><LogOut size={17} />Logout</button>
-            <div className="user-chip"><span>AD</span><div><strong>Clinic Admin</strong><small>Super Admin</small></div></div>
+            <div className="user-chip"><span>AD</span><div><strong>{displayUserName(currentUser, 'Clinic Admin')}</strong><small>{currentUser?.role || 'Super Admin'}</small></div></div>
           </div>
         </header>
         <Outlet />
@@ -1875,9 +2047,15 @@ function AdminListing({ title, endpoint, icon: Icon }) {
 function AdminApprovals() {
   const [refresh, setRefresh] = useState(0);
   const [message, setMessage] = useState('');
+  const [approvedFilter, setApprovedFilter] = useState('all');
   const { data, loading, error } = useApi('/users', refresh);
   const pending = (data?.users || []).filter((user) => user.status === 'Pending');
   const approved = (data?.users || []).filter((user) => user.status === 'Active');
+  const approvedVisible = approved.filter((user) => {
+    if (approvedFilter === 'doctors') return user.role === 'Doctor';
+    if (approvedFilter === 'assistants') return user.role === 'Assistant';
+    return true;
+  });
 
   const approve = async (event, id) => {
     event.preventDefault();
@@ -1924,10 +2102,15 @@ function AdminApprovals() {
         </div>
       </Panel>
       <Panel title={`Approved Users (${approved.length})`} icon={Users}>
+        <div className="segmented-toolbar">
+          <button className={approvedFilter === 'all' ? 'active' : ''} type="button" onClick={() => setApprovedFilter('all')}>View All Records</button>
+          <button className={approvedFilter === 'doctors' ? 'active' : ''} type="button" onClick={() => setApprovedFilter('doctors')}>Approved Doctors</button>
+          <button className={approvedFilter === 'assistants' ? 'active' : ''} type="button" onClick={() => setApprovedFilter('assistants')}>Approved Assistants</button>
+        </div>
         {loading && <p className="muted">Loading approved users...</p>}
-        {!loading && !approved.length && <p className="muted">No approved users found.</p>}
+        {!loading && !approvedVisible.length && <p className="muted">No approved users found.</p>}
         <div className="approval-list">
-          {approved.map((user) => (
+          {approvedVisible.map((user) => (
             <article className="approval-card approved-user-card" key={user.id}>
               <div>
                 <strong>{user.name}</strong>
@@ -1944,28 +2127,97 @@ function AdminApprovals() {
   );
 }
 
+function AdminPatients() {
+  const navigate = useNavigate();
+  const { data, loading, error } = useApi('/patients');
+  const patients = data?.patients || [];
+  return (
+    <Page title="Patients" eyebrow="Admin web module">
+      <Panel title={`Patient Records (${patients.length})`} icon={Users}>
+        {loading && <p className="muted">Loading patient records...</p>}
+        {error && <p className="error-text">Backend unavailable: {error.message}</p>}
+        {!loading && !patients.length && <p className="muted">No patient records found.</p>}
+        <div className="data-list">
+          {patients.map((patient) => (
+            <button className="data-row patient-admin-row" type="button" key={patient.id} onClick={() => navigate(`/admin/patients/${patient.id}`)}>
+              <strong>{patient.name}</strong>
+              <span>{patient.mobile || '-'} | Age {patient.age || '-'} | {patient.gender || '-'} | {patient.address || patient.city || 'No address'}</span>
+              <small>{patient.chiefComplaint || patient.treatmentStatus || 'No clinical summary'} | Code: {patient.id}</small>
+            </button>
+          ))}
+        </div>
+      </Panel>
+    </Page>
+  );
+}
+
+function AdminPatientDetails() {
+  const { patientId } = useParams();
+  const navigate = useNavigate();
+  const { data, loading, error } = useApi(`/patients/${patientId}`);
+  const patient = data?.patient;
+  return (
+    <Page title={patient?.name || 'Patient Details'} eyebrow="Admin patient record">
+      <div className="page-heading-action">
+        <button className="secondary-button compact-action" type="button" onClick={() => navigate('/admin/patients')}>Close</button>
+      </div>
+      {loading && <p className="muted">Loading patient details...</p>}
+      {error && <p className="error-text">Backend unavailable: {error.message}</p>}
+      {patient && (
+        <div className="two-column">
+          <Panel title="Basic Details" icon={Users}>
+            <div className="admin-detail-grid">
+              <div><span>Mobile</span><strong>{patient.mobile || '-'}</strong></div>
+              <div><span>Age / Gender</span><strong>{patient.age || '-'} / {patient.gender || '-'}</strong></div>
+              <div><span>Address</span><strong>{patient.address || patient.city || '-'}</strong></div>
+              <div><span>Treatment Status</span><strong>{patient.treatmentStatus || '-'}</strong></div>
+              <div><span>Complaint</span><strong>{patient.chiefComplaint || '-'}</strong></div>
+              <div><span>Tooth</span><strong>{patient.toothNumber || '-'}</strong></div>
+              <div><span>Medical Flags</span><strong>{Array.isArray(patient.medicalFlags) ? patient.medicalFlags.join(', ') : patient.medicalFlags || '-'}</strong></div>
+              <div><span>Last Visit</span><strong>{patient.lastVisitDate || '-'}</strong></div>
+            </div>
+          </Panel>
+          <Panel title="Visit History" icon={ClipboardList}>
+            <PatientHistoryDays historyDays={patient.historyDays || []} />
+          </Panel>
+        </div>
+      )}
+    </Page>
+  );
+}
+
 function HospitalMasterAdmin() {
   const [refresh, setRefresh] = useState(0);
   const [message, setMessage] = useState('');
+  const [pendingDelete, setPendingDelete] = useState(null);
   const { data, loading, error } = useApi('/hospitals', refresh);
 
   const addHospital = async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(event.currentTarget));
-    await apiPost('/hospitals', { ...payload, actor: 'Admin' });
-    event.currentTarget.reset();
-    setMessage('Hospital added to master.');
-    setRefresh((value) => value + 1);
+    try {
+      const result = await apiPost('/hospitals', { ...payload, actor: 'Admin' });
+      event.currentTarget.reset();
+      setMessage(`Hospital added to master with code ${result.hospital.code}.`);
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setMessage(error.message);
+    }
   };
 
   const deleteHospital = async (id) => {
-    const response = await fetch(apiUrl(`/hospitals/${id}`), { method: 'DELETE' });
+    const response = await fetch(apiUrl(`/hospitals/${id}`), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: 'Admin' })
+    });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       setMessage(payload.error || 'Unable to delete hospital.');
       return;
     }
     setMessage('Hospital deleted.');
+    setPendingDelete(null);
     setRefresh((value) => value + 1);
   };
 
@@ -1975,7 +2227,7 @@ function HospitalMasterAdmin() {
       <Panel title="Add Hospital" icon={Database}>
         <form className="admin-inline-form" onSubmit={addHospital}>
           <Input name="name" label="Hospital name" required />
-          <Input name="code" label="Code" placeholder="SRC-MUM" />
+          <Input name="code" label="Code" placeholder="Auto generated if blank" />
           <Input name="city" label="City" />
           <SelectInput name="status" label="Status" value="Active" options={['Active', 'Inactive']} />
           <Input name="description" label="Description" wide />
@@ -1990,11 +2242,23 @@ function HospitalMasterAdmin() {
             <div className="data-row admin-master-row" key={hospital.id}>
               <strong>{hospital.name}</strong>
               <span>{[hospital.code, hospital.city, hospital.status].filter(Boolean).join(' | ')}</span>
-              <button type="button" onClick={() => deleteHospital(hospital.id)}><Trash2 size={15} />Delete</button>
+              <button type="button" onClick={() => setPendingDelete(hospital)}><Trash2 size={15} />Delete</button>
             </div>
           ))}
         </div>
       </Panel>
+      {pendingDelete && (
+        <div className="confirm-overlay" role="dialog" aria-modal="true">
+          <div className="confirm-card">
+            <strong>Delete hospital?</strong>
+            <p>Are you sure you want to delete {pendingDelete.name}? Hospitals assigned to users cannot be deleted.</p>
+            <div>
+              <button type="button" onClick={() => setPendingDelete(null)}>Cancel</button>
+              <button type="button" onClick={() => deleteHospital(pendingDelete.id)}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Page>
   );
 }
@@ -2320,6 +2584,7 @@ function CaseSummary({ item, compact }) {
         {!compact && <div><dt>Tests</dt><dd>{item.doctor?.testsRequested?.join(', ') || 'Not requested'}</dd></div>}
         {!compact && <div><dt>Next visit</dt><dd>{item.doctor?.nextVisitDate || '-'}</dd></div>}
       </dl>
+      {!compact && <PatientHistoryDays historyDays={item.patient?.historyDays || groupTimelineByDate(item.patient?.timeline || [])} />}
     </div>
   );
 }
@@ -2441,7 +2706,7 @@ function Section({ title, children }) {
   );
 }
 
-function Input({ label, wide, value, name, required, placeholder, onBlur, onChange, disabled }) {
+function Input({ label, wide, value, controlledValue, name, required, placeholder, onBlur, onChange, disabled }) {
   const mobileProps = name === 'mobile'
     ? {
         pattern: '^[6-9][0-9]{9}$',
@@ -2450,19 +2715,25 @@ function Input({ label, wide, value, name, required, placeholder, onBlur, onChan
         maxLength: 10
       }
     : {};
+  const controlProps = controlledValue !== undefined
+    ? { value: controlledValue, onChange: onChange || (() => {}) }
+    : { defaultValue: value || '', onChange };
   return (
     <label className={wide ? 'field wide' : 'field'}>
       <span>{label}{required && <b className="required-star">*</b>}</span>
-      <input name={name} defaultValue={value || ''} required={required} placeholder={placeholder || ''} onBlur={onBlur} onChange={onChange} disabled={disabled} {...mobileProps} />
+      <input name={name} required={required} placeholder={placeholder || ''} onBlur={onBlur} disabled={disabled} {...mobileProps} {...controlProps} />
     </label>
   );
 }
 
-function SelectInput({ label, wide, value, name, required, options, disabled }) {
+function SelectInput({ label, wide, value, controlledValue, name, required, options, disabled, onChange }) {
+  const controlProps = controlledValue !== undefined
+    ? { value: controlledValue, onChange: onChange || (() => {}) }
+    : { defaultValue: value || '', onChange };
   return (
     <label className={wide ? 'field wide' : 'field'}>
       <span>{label}{required && <b className="required-star">*</b>}</span>
-      <select name={name} defaultValue={value || ''} required={required} disabled={disabled}>
+      <select name={name} required={required} disabled={disabled} {...controlProps}>
         <option value="" disabled>Select {label.toLowerCase()}</option>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
       </select>
@@ -2546,6 +2817,8 @@ function formToPatient(form) {
     appointmentDate: data.appointmentDate || todayDate(),
     doctorId: data.doctorId || '',
     hospitalId: data.hospitalId || '',
+    assistantId: data.assistantId || '',
+    assistantName: data.assistantName || '',
     matchedPatientId: data.matchedPatientId || '',
     allowDuplicateMobile: data.allowDuplicateMobile === 'true',
     patient: {
@@ -2621,6 +2894,66 @@ function formatDateTime(value) {
 function formatCurrency(value) {
   const amount = Number(String(value || 0).replace(/[^\d.]/g, '')) || 0;
   return `Rs. ${amount.toLocaleString('en-IN')}`;
+}
+
+function emptyPatientDraft() {
+  return {
+    mobile: '',
+    name: '',
+    age: '',
+    gender: '',
+    address: '',
+    chiefComplaint: '',
+    toothNumber: '',
+    medicalFlags: ''
+  };
+}
+
+function patientToDraft(patient = {}) {
+  return {
+    mobile: patient.mobile || '',
+    name: patient.name || '',
+    age: patient.age || '',
+    gender: patient.gender || '',
+    address: patient.address || patient.city || '',
+    chiefComplaint: patient.chiefComplaint || '',
+    toothNumber: patient.toothNumber || '',
+    medicalFlags: Array.isArray(patient.medicalFlags)
+      ? patient.medicalFlags.join(', ')
+      : (Array.isArray(patient.flags) ? patient.flags.join(', ') : (patient.medicalFlags || patient.flags || ''))
+  };
+}
+
+function applyPatientToForm(form, patient) {
+  if (!form || !patient) return;
+  const setValue = (name, value) => {
+    const field = form.querySelector(`[name="${name}"]`);
+    if (field && value !== undefined && value !== null) {
+      field.value = Array.isArray(value) ? value.join(', ') : value;
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+  setValue('name', patient.name);
+  setValue('mobile', patient.mobile);
+  setValue('age', patient.age);
+  setValue('gender', patient.gender);
+  setValue('address', patient.address);
+  setValue('chiefComplaint', patient.chiefComplaint);
+  setValue('toothNumber', patient.toothNumber);
+  setValue('medicalFlags', patient.medicalFlags || []);
+}
+
+function groupTimelineByDate(timeline = []) {
+  const grouped = new Map();
+  for (const entry of timeline) {
+    const date = entry.date || todayDate();
+    if (!grouped.has(date)) grouped.set(date, []);
+    grouped.get(date).push({ title: entry.title || 'Timeline', note: entry.note || '' });
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([date, items]) => ({ date, items }));
 }
 
 function buildTimeSlots(start, end, intervalMinutes) {

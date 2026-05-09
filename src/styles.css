@@ -944,9 +944,86 @@ td span {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.patient-admin-row {
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.patient-admin-row:hover {
+  border-color: #b9d5ed;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.patient-admin-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-detail-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-detail-grid div {
+  border-bottom: 1px solid #eef4f8;
+  display: grid;
+  gap: 2px;
+  padding-bottom: 8px;
+}
+
+.admin-detail-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-detail-grid strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.page-heading-action {
+  display: flex;
+  justify-content: flex-end;
+  margin: -14px 0 12px;
+}
+
 .approval-list {
   display: grid;
   gap: 12px;
+}
+
+.segmented-toolbar {
+  background: #f5f9fd;
+  border: 1px solid #dce8f2;
+  border-radius: var(--radius);
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 5px;
+}
+
+.segmented-toolbar button {
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 1;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 8px 10px;
+}
+
+.segmented-toolbar button.active {
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgba(13, 92, 145, 0.1);
+  color: var(--primary);
 }
 
 .approval-card {
@@ -1107,6 +1184,29 @@ td span {
 .mapping-list {
   display: grid;
   gap: 8px;
+}
+
+.mapping-hospital-pill {
+  align-items: center;
+  background: #f7fbff;
+  border: 1px solid #dce8f2;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+}
+
+.mapping-hospital-pill span,
+.mapping-hospital-pill small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mapping-hospital-pill strong {
+  color: var(--ink);
+  font-size: 14px;
 }
 
 .mapping-row {
@@ -2741,6 +2841,218 @@ td span {
   border-color: var(--primary);
   color: #ffffff;
   box-shadow: 0 8px 18px rgba(25, 118, 210, 0.18);
+}
+
+.patient-lookup-overlay {
+  align-items: flex-end;
+  background: rgba(15, 23, 42, 0.34);
+  bottom: 0;
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: center;
+  left: 0;
+  padding: 12px;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 80;
+}
+
+.patient-lookup-modal {
+  background: #ffffff;
+  border-radius: 18px 18px 12px 12px;
+  box-shadow: 0 -18px 44px rgba(15, 23, 42, 0.22);
+  display: grid;
+  gap: 10px;
+  max-height: 86vh;
+  max-width: 430px;
+  overflow: auto;
+  padding: 12px;
+  width: 100%;
+}
+
+.patient-lookup-modal > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.patient-lookup-modal > header strong,
+.patient-lookup-modal > header span {
+  display: block;
+}
+
+.patient-lookup-modal > header strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.patient-lookup-modal > header span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.patient-lookup-modal > header button {
+  background: #eef6ff;
+  border: 1px solid #cfe3f7;
+  border-radius: 999px;
+  color: var(--primary-strong);
+  font-size: 12px;
+  font-weight: 900;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.patient-match-list {
+  display: grid;
+  gap: 10px;
+}
+
+.patient-match-card {
+  background: #ffffff;
+  border: 1px solid #dce8f2;
+  border-radius: var(--radius);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.patient-match-main {
+  align-items: flex-start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.patient-match-main strong,
+.patient-match-main span,
+.patient-match-main small {
+  display: block;
+}
+
+.patient-match-main strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.patient-match-main span,
+.patient-match-main small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.patient-match-main button,
+.patient-create-new {
+  justify-content: center;
+}
+
+.patient-match-main button {
+  background: var(--primary);
+  border: 0;
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.patient-match-details {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.patient-match-details div {
+  background: #f6f9fc;
+  border: 1px solid #e6eef6;
+  border-radius: 8px;
+  min-width: 0;
+  padding: 7px;
+}
+
+.patient-match-details span,
+.patient-match-details strong {
+  display: block;
+}
+
+.patient-match-details span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.patient-match-details strong {
+  color: var(--ink);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patient-history-days {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.patient-history-days.compact {
+  margin-top: 0;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.patient-history-day {
+  border-left: 3px solid var(--primary);
+  display: grid;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+.patient-history-day time {
+  color: var(--primary-strong);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.patient-history-day > div {
+  display: grid;
+  gap: 6px;
+}
+
+.patient-history-entry {
+  background: #f8fbff;
+  border: 1px solid #e6eef6;
+  border-radius: 8px;
+  display: grid;
+  gap: 2px;
+  padding: 7px;
+}
+
+.patient-history-entry strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.patient-history-entry span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.history-empty {
+  font-size: 11px;
 }
 
 .sheet-actions {

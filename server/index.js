@@ -58,7 +58,7 @@ app.get('/api/cases', (req, res) => {
   if (req.query.queue === 'assistant-intake') cases = cases.filter((item) => item.status === 'assistant_intake');
   if (req.query.doctorId) cases = cases.filter((item) => item.assignedDoctorId === req.query.doctorId);
   if (req.query.date) cases = cases.filter((item) => caseActivityDate(item) === req.query.date);
-  res.json({ cases });
+  res.json({ cases: cases.map(enrichCase) });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -205,6 +205,7 @@ app.post('/api/cases', (req, res) => {
   if (!String(patient.name || '').trim()) return res.status(400).json({ error: 'Patient name is required' });
   if (!String(patient.age || '').trim()) return res.status(400).json({ error: 'Patient age is required' });
   if (!String(patient.gender || '').trim()) return res.status(400).json({ error: 'Patient gender is required' });
+  if (!String(patient.address || '').trim()) return res.status(400).json({ error: 'Patient address is required' });
   const appointmentTime = req.body.appointmentTime || patient.appointmentTime;
   const appointmentDay = req.body.appointmentDate || patient.appointmentDate || today();
   if (!isValidAppointmentTime(appointmentTime)) {
@@ -230,7 +231,8 @@ app.post('/api/cases', (req, res) => {
   if (mobileMatches.length && !selectedExisting && !sameNameExisting && !allowDuplicateMobile) {
     return res.status(409).json({
       error: `Mobile number already exists for ${mobileMatches[0].name}. Confirm existing patient or create a new patient record.`,
-      patient: patientSummary(mobileMatches[0])
+      patient: patientFullSummary(mobileMatches[0]),
+      patients: mobileMatches.map(patientFullSummary)
     });
   }
   if (allowDuplicateMobile && sameNameExisting && !selectedExisting) {
@@ -260,8 +262,10 @@ app.post('/api/cases', (req, res) => {
     assignedDoctorId: assignedDoctor?.id || '',
     assignedDoctorName: assignedDoctor?.name || '',
     hospitalId: caseHospitalId,
+    assistantId: req.body.assistantId || '',
+    assistantName: req.body.assistantName || '',
     assistant: {
-      intakeBy: 'Assistant',
+      intakeBy: req.body.assistantName || 'Assistant',
       consentCaptured: Boolean(patient.consent),
       intakeAt: new Date().toISOString()
     },
@@ -286,7 +290,7 @@ app.post('/api/cases', (req, res) => {
   });
   patientRecord.timeline.unshift({ id: `TL-${Date.now()}`, title: 'Assistant intake', date: today(), note: 'Submitted to doctor queue' });
   log('ASSISTANT_SUBMIT_TO_DOCTOR', 'Assistant', item.id);
-  res.status(201).json({ case: item });
+  res.status(201).json({ case: enrichCase(item) });
 });
 
 app.patch('/api/queue/skip-next', (req, res) => {
@@ -362,7 +366,7 @@ app.patch('/api/cases/:id/send-earlier', (req, res) => {
 app.get('/api/cases/:id', (req, res) => {
   const item = db.cases.find((caseItem) => caseItem.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Case not found' });
-  res.json({ case: item });
+  res.json({ case: enrichCase(item) });
 });
 
 app.patch('/api/cases/:id/basic', (req, res) => {
@@ -518,15 +522,16 @@ app.get('/api/patients/lookup', (req, res) => {
   const matches = db.patients.filter((item) => (
     compactMobile(item.mobile) === mobile && (!hospitalId || patientHospitalId(item) === hospitalId)
   ));
-  const patient = matches[0];
+  const patients = matches.map(patientFullSummary);
+  const patient = patients[0];
   if (!patient) return res.json({ patient: null });
-  res.json({ patient: patientSummary(patient), patients: matches.map(patientSummary) });
+  res.json({ patient, patients });
 });
 
 app.get('/api/patients/:id', (req, res) => {
   const patient = db.patients.find((item) => item.id === req.params.id);
   if (!patient) return res.status(404).json({ error: 'Patient not found' });
-  res.json({ patient });
+  res.json({ patient: { ...patient, ...patientFullSummary(patient) } });
 });
 
 app.get('/api/patients/:id/visits', (req, res) => {
@@ -728,6 +733,21 @@ app.post('/api/doctor-assistant-mappings', (req, res) => {
   const allowedIds = new Set(allowedAssistants.map((user) => user.id));
   const assistantIds = [...new Set(requestedIds)].filter((id) => allowedIds.has(id));
   const mapping = getDoctorAssistantMapping(doctor);
+  const removedIds = (mapping.assistantIds || []).filter((id) => !assistantIds.includes(id));
+  const blockingCases = db.cases.filter((item) => {
+    if (item.assignedDoctorId !== doctor.id) return false;
+    if (['completed', 'cancelled'].includes(item.status) || ['visit_complete', 'visit_cancelled'].includes(item.visitStatus)) return false;
+    return removedIds.some((assistantId) => {
+      const assistant = allowedAssistants.find((user) => user.id === assistantId);
+      return item.assistantId === assistantId || (assistant && item.assistant?.intakeBy === assistant.name);
+    });
+  });
+  if (blockingCases.length) {
+    return res.status(409).json({
+      error: `Cannot unmap assistant while ${blockingCases.length} patient case(s) are still open. Mark those cases complete or cancel them first.`,
+      cases: blockingCases.map((item) => ({ id: item.id, patientName: item.patient?.name, status: item.status }))
+    });
+  }
   mapping.assistantIds = assistantIds;
   mapping.hospitalId = doctor.hospitalId;
   mapping.updatedAt = new Date().toISOString();
@@ -974,6 +994,85 @@ function patientSummary(patient) {
     lastVisitDate: patient.lastVisitDate || patient.timeline?.[0]?.date || '',
     treatmentStatus: patient.treatmentStatus || ''
   };
+}
+
+function enrichCase(item) {
+  return {
+    ...item,
+    patient: {
+      ...item.patient,
+      historyDays: patientHistoryDays(item.patient)
+    }
+  };
+}
+
+function patientFullSummary(patient) {
+  return {
+    ...patientSummary(patient),
+    age: patient.age || '',
+    gender: patient.gender || '',
+    city: patient.city || '',
+    address: patient.address || '',
+    chiefComplaint: patient.chiefComplaint || '',
+    toothNumber: patient.toothNumber || '',
+    medicalFlags: patient.medicalFlags || patient.flags || [],
+    historyDays: patientHistoryDays(patient)
+  };
+}
+
+function patientHistoryDays(patient) {
+  const events = [];
+  for (const entry of patient.timeline || []) {
+    events.push({
+      date: entry.date || today(),
+      title: entry.title || 'Timeline',
+      note: entry.note || ''
+    });
+  }
+  for (const item of db.cases.filter((record) => record.patientId === patient.id)) {
+    events.push({
+      date: (item.createdAt || today()).slice(0, 10),
+      title: `Case ${item.queueNumber} - ${formatStatusText(item.status)}`,
+      note: item.doctor?.diagnosis || item.patient?.chiefComplaint || item.visitStatus || ''
+    });
+    if (item.doctor?.submittedAt) {
+      events.push({
+        date: item.doctor.submittedAt.slice(0, 10),
+        title: 'Doctor analysis',
+        note: item.doctor.diagnosis || item.doctor.treatmentPlan || ''
+      });
+    }
+    if (item.closure?.closedAt) {
+      events.push({
+        date: item.closure.closedAt.slice(0, 10),
+        title: 'Fees collection',
+        note: `${item.closure.paymentMode || 'Payment'} ${formatMoney(toAmount(item.closure.feesCollected))}`
+      });
+    }
+  }
+  for (const visit of db.visits.filter((item) => item.patientId === patient.id)) {
+    events.push({ date: visit.date || today(), title: visit.title || 'Visit', note: visit.note || '' });
+  }
+  for (const prescription of db.prescriptions.filter((item) => item.patientId === patient.id)) {
+    events.push({ date: prescription.date || today(), title: `Prescription - ${prescription.title}`, note: prescription.description || '' });
+  }
+  for (const document of db.documents.filter((item) => item.patientId === patient.id)) {
+    events.push({ date: document.date || today(), title: document.title || 'Document', note: `${document.type || ''} ${document.status || ''}`.trim() });
+  }
+
+  const grouped = new Map();
+  for (const event of events) {
+    const date = event.date || today();
+    if (!grouped.has(date)) grouped.set(date, []);
+    grouped.get(date).push(event);
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([date, items]) => ({ date, items }));
+}
+
+function formatStatusText(value = '') {
+  return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatPrescription(items) {
@@ -1274,14 +1373,34 @@ function createUser(input) {
 function createHospital(input) {
   const name = String(input.name || '').trim();
   if (!name) throwHttp(400, 'Hospital name is required');
+  const code = String(input.code || '').trim() || nextHospitalCode(name);
   return {
     id: input.id || nextId('HOSP', db.hospitals.length + 1),
     name,
-    code: String(input.code || '').trim(),
+    code,
     city: String(input.city || '').trim(),
     status: input.status || 'Active',
     description: input.description || ''
   };
+}
+
+function nextHospitalCode(name) {
+  const base = name
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 4)
+    .toUpperCase() || 'HOSP';
+  let index = db.hospitals.length + 1;
+  let code = `${base}-${String(index).padStart(3, '0')}`;
+  const existingCodes = new Set((db.hospitals || []).map((hospital) => String(hospital.code || '').toUpperCase()));
+  while (existingCodes.has(code.toUpperCase())) {
+    index += 1;
+    code = `${base}-${String(index).padStart(3, '0')}`;
+  }
+  return code;
 }
 
 function findDoctor(doctorId, doctorEmail) {
