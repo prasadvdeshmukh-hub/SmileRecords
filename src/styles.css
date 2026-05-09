@@ -299,7 +299,7 @@ td span {
 }
 
 .login-page {
-  justify-content: flex-start;
+  justify-content: center;
   padding: 16px;
 }
 
@@ -1279,7 +1279,7 @@ td span {
 .dose-controls {
   display: grid;
   gap: 6px;
-  grid-template-columns: minmax(98px, .6fr) minmax(0, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .dose-controls label {
@@ -1301,6 +1301,25 @@ td span {
   font-size: 13px;
   min-height: 34px;
   padding: 5px 8px;
+}
+
+.dose-time-control {
+  justify-self: end;
+  width: 100%;
+}
+
+.dose-suggestion-control {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 520px) {
+  .dose-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dose-time-control {
+    grid-column: 2;
+  }
 }
 
 .mapping-list {
@@ -2611,6 +2630,28 @@ button.date-selector {
   color: #ffffff;
 }
 
+.doctor-bottom-dock {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.doctor-bottom-dock button {
+  background: #f3f8fc;
+  border-color: #dce8f2;
+  color: var(--primary-strong);
+}
+
+.doctor-bottom-dock button:last-child {
+  background: #f3f8fc;
+  border-color: #dce8f2;
+  color: var(--primary-strong);
+}
+
+.doctor-bottom-dock button:first-child {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+
 .top-actions {
   align-items: center;
   display: flex;
@@ -3573,7 +3614,9 @@ td span {
   color: var(--primary-strong);
 }
 
-.status.doctor-done {
+.status.doctor-done,
+.status.fees-pending,
+.status.fees-collection {
   background: #fff6e6;
   color: #936300;
 }
@@ -3757,6 +3800,12 @@ td span {
   align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.field-label-main {
+  align-items: center;
+  display: inline-flex !important;
+  gap: 2px;
 }
 
 .textarea-field small {

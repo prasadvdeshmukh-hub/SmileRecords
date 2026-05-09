@@ -339,6 +339,26 @@ async function run() {
   const cancelledQueue = await request('/cases?queue=cancelled');
   assert(cancelledQueue.cases.some((item) => item.id === cancelIntake.case.id), 'Cancelled case should appear in cancelled queue');
 
+  const reusedCancelledSlot = await request('/cases', {
+    method: 'POST',
+    body: JSON.stringify({
+      appointmentTime: '13:00',
+      doctorId: 'U-6',
+      patient: {
+        name: 'Reused Cancelled Slot',
+        mobile: '9876543212',
+        age: '37',
+        gender: 'Female',
+        address: 'Reuse Address',
+        chiefComplaint: 'New appointment after cancellation',
+        toothNumber: '17',
+        appointmentTime: '13:00',
+        consent: true
+      }
+    })
+  });
+  assert(reusedCancelledSlot.case.id, 'Cancelled appointment time slot should be reusable');
+
   const createdTest = await request('/tests', {
     method: 'POST',
     body: JSON.stringify({ name: 'Smoke Test X-ray', type: 'X-ray', description: 'Temporary test master' })

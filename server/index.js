@@ -35,9 +35,9 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/admin/reset-data', (req, res) => {
-  if (IS_DEPLOYED_RUNTIME && process.env.ALLOW_DATA_RESET !== 'true') {
+  if ((IS_DEPLOYED_RUNTIME || storage.mode === 'firestore') && process.env.ALLOW_DATA_RESET !== 'true') {
     return res.status(403).json({
-      error: 'Data reset is disabled in deployed environments. Set ALLOW_DATA_RESET=true only for an intentional one-time reset.'
+      error: 'Data reset is disabled for deployed or Firestore-backed environments. Set ALLOW_DATA_RESET=true only for an intentional one-time reset.'
     });
   }
   db = prepareDb(seed);
@@ -67,7 +67,7 @@ app.get('/api/dashboard', (req, res) => {
 app.get('/api/cases', (req, res) => {
   let cases = db.cases;
   if (req.query.queue === 'doctor') cases = cases.filter((item) => item.status === 'doctor_queue' && item.visitStatus !== 'cancelled');
-  if (req.query.queue === 'assistant-closure') cases = cases.filter((item) => item.status === 'assistant_closure' && item.visitStatus !== 'visit_complete');
+  if (req.query.queue === 'assistant-closure') cases = cases.filter((item) => canAssistantCollectFees(item));
   if (req.query.queue === 'assistant-intake') cases = cases.filter((item) => item.status === 'assistant_intake');
   if (req.query.queue === 'closed') cases = cases.filter((item) => item.status === 'completed' || item.visitStatus === 'visit_complete');
   if (req.query.queue === 'cancelled') cases = cases.filter((item) => item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled'));
@@ -241,7 +241,8 @@ app.post('/api/cases', (req, res) => {
     return res.status(400).json({ error: 'Appointment time must use a 15 minute slot between 09:00 and 18:00' });
   }
   if (db.appointments.some((item) => (
-    item.time === appointmentTime
+    isSlotBlockingAppointment(item)
+    && item.time === appointmentTime
     && appointmentDate(item) === appointmentDay
     && (item.doctorId || '') === (assignedDoctor?.id || '')
   ))) {
@@ -1166,8 +1167,13 @@ function formatStatusText(value = '') {
 function formatPrescription(items) {
   return (items || []).map((item) => {
     const dose = item.dosePattern ? ` [${item.dosePattern}]` : '';
+    const masterDetails = [
+      item.selectedStrength,
+      item.selectedDosageForm,
+      item.selectedUse
+    ].filter((value) => value && value !== '-').join(' - ');
     const suggestion = item.doseSuggestion || item.description || item.generic || '';
-    return `${item.name}${dose}${suggestion ? ` - ${suggestion}` : ''}`.trim();
+    return `${item.name}${masterDetails ? ` - ${masterDetails}` : ''}${dose}${suggestion ? ` - ${suggestion}` : ''}`.trim();
   }).join('; ');
 }
 
@@ -1274,6 +1280,10 @@ function sendCaseToDoctor(item) {
 
 function isClosedAppointment(appointment) {
   return ['complete', 'completed', 'cancelled'].includes(appointment.status);
+}
+
+function isSlotBlockingAppointment(appointment) {
+  return !['cancelled'].includes(appointment.status);
 }
 
 function isCaseVisibleToDoctor(item, doctor) {

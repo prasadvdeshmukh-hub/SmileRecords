@@ -342,12 +342,15 @@ function PendingApproval() {
 function MobileShell({ role }) {
   const isDoctor = role === 'doctor';
   const currentUser = getStoredUser();
-  const queuePath = isDoctor ? '/cases?queue=doctor' : '/cases?queue=assistant-closure';
+  const queuePath = isDoctor
+    ? '/cases?queue=doctor'
+    : `/fees-summary?assistantEmail=${encodeURIComponent(currentUser?.email || '')}`;
   const [refresh, setRefresh] = useState(0);
   const { data } = useApi(queuePath, refresh);
   const { data: notificationData } = useApi(`/notifications?email=${encodeURIComponent(currentUser?.email || '')}`, refresh);
-  const feesPendingCount = isDoctor ? 0 : (data?.cases?.length ?? 0);
-  const queueCount = (data?.cases?.length ?? 0) + ((notificationData?.notifications || []).filter((item) => item.status !== 'Read').length);
+  const feesPendingCount = isDoctor ? 0 : (data?.readyCases?.length ?? 0);
+  const activeQueueCount = isDoctor ? (data?.cases?.length ?? 0) : feesPendingCount;
+  const queueCount = activeQueueCount + ((notificationData?.notifications || []).filter((item) => item.status !== 'Read').length);
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => {
@@ -417,14 +420,7 @@ function MobileShell({ role }) {
         <Outlet />
       </main>
       {isDoctor ? (
-        <nav className="mobile-tabs">
-          {bottomTabs.map((tab) => (
-            <NavLink key={tab.to} to={tab.to}>
-              <tab.icon size={19} />
-              <span>{tab.label}</span>
-            </NavLink>
-          ))}
-        </nav>
+        <DoctorBottomDock tabs={bottomTabs} />
       ) : (
         <AssistantBottomDock feesPendingCount={feesPendingCount} />
       )}
@@ -509,7 +505,9 @@ function AssistantIntake() {
   const selectedDoctor = doctorOptions.find((doctor) => doctor.id === effectiveDoctorId);
   const activeHospitalId = selectedDoctor?.hospitalId || doctorOptionData?.hospital?.id || currentUser?.hospitalId || '';
   const navigate = useNavigate();
-  const bookedTimes = useMemo(() => new Set((appointmentData?.appointments || []).map((item) => item.time)), [appointmentData]);
+  const bookedTimes = useMemo(() => new Set((appointmentData?.appointments || [])
+    .filter((item) => !isCancelledAppointment(item))
+    .map((item) => item.time)), [appointmentData]);
   const [returningPatient, setReturningPatient] = useState(null);
   const [lookupPatients, setLookupPatients] = useState([]);
   const [lookupOpen, setLookupOpen] = useState(false);
@@ -567,7 +565,7 @@ function AssistantIntake() {
       }
       return;
     }
-    setMessage(`No. ${result.case.queueNumber} submitted to doctor queue.`);
+    setMessage('');
     form.reset();
     setReturningPatient(null);
     setLookupPatients([]);
@@ -874,7 +872,7 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
     { label: 'All', status: 'all', value: scopedAppointments.length },
     { label: 'Scheduled', status: 'scheduled', value: counts.scheduled || 0 },
     { label: 'Doctor Queue', status: 'doctor_queue', value: counts.doctor_queue || 0 },
-    { label: 'Doctor Done', status: 'doctor_done', value: counts.doctor_done || 0 },
+    { label: 'Fees Collection', status: 'doctor_done', value: counts.doctor_done || 0 },
     { label: 'Closed', status: 'complete', value: counts.complete || 0 },
     { label: 'Cancelled', status: 'cancelled', value: counts.cancelled || 0 }
   ];
@@ -957,7 +955,7 @@ function AssistantFeesQueue() {
   ));
 
   return (
-    <MobilePage title="Fees Collection" subtitle="Cash and UPI collection by mapped doctor." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
+    <MobilePage title="Fees Collection" action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       <DoctorRadioSelector doctors={doctorOptions} selectedDoctorId={effectiveDoctorId} onChange={setSelectedDoctorId} />
       <FeesDashboard data={data} active={paymentFilter} onChange={setPaymentFilter} />
       <MobileSection title={`Fees Pending (${data?.readyCases?.length || 0})`}>
@@ -1006,21 +1004,33 @@ function DoctorWiseFees({ rows }) {
 }
 
 function FeesWorkflowList({ loading, error, cases, mode = 'ready' }) {
+  const [message, setMessage] = useState('');
   if (loading) return <p className="muted">Loading fees queue...</p>;
   if (error) return <p className="error-text">Unable to load fees queue: {error.message}</p>;
   if (!cases.length) return <p className="muted">{mode === 'paid' ? 'No fees collected for selected filter.' : 'No pending fees collection cases.'}</p>;
 
   return (
     <div className="fees-workflow-list">
-      {cases.map((item) => (
-        <NavLink className="fees-queue-row" key={item.id} to={`/assistant/case/${item.id}`} state={{ from: 'fees' }}>
-          <div className="appointment-number">{item.queueNumber}</div>
+      {message && <p className="queue-message">{message}</p>}
+      {cases.map((item, index) => (
+        <NavLink
+          className="fees-queue-row"
+          key={item.id}
+          to={`/assistant/case/${item.id}`}
+          state={{ from: 'fees' }}
+          onClick={(event) => {
+            if (mode === 'paid') {
+              event.preventDefault();
+              setMessage('Fees already collected. Completed fee records cannot be edited.');
+            }
+          }}
+        >
+          <div className="appointment-number">{index + 1}</div>
           <div className="appointment-main">
             <strong className="appointment-name">{item.patient.name}</strong>
             <span>{item.patient.mobile} | {mode === 'paid' ? `${item.closure?.paymentMode} ${formatCurrency(item.closure?.feesCollected)}` : (item.doctor?.diagnosis || item.patient.chiefComplaint || 'Fees pending')}</span>
           </div>
           <div className="appointment-send-cell">
-            <Status value={formatStatus(item.visitStatus || item.status)} />
             <Status value={mode === 'ready' ? 'Fees Pending' : 'Fees Collected'} />
             <span className="send-appointment-button">
               {mode === 'ready' ? 'Fees' : 'Paid'}
@@ -1266,6 +1276,7 @@ function AssistantCase() {
   const visitCancelled = item ? item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled') : false;
   const [paymentMode, setPaymentMode] = useState('Cash');
   const [confirmFeesComplete, setConfirmFeesComplete] = useState(null);
+  const [confirmCancelVisit, setConfirmCancelVisit] = useState(false);
 
   const updateBasic = async (event) => {
     event.preventDefault();
@@ -1323,6 +1334,7 @@ function AssistantCase() {
 
   const cancelVisit = async () => {
     await apiPost(`/cases/${caseId}/cancel-visit`, { actor: 'Assistant' }, 'PATCH');
+    setConfirmCancelVisit(false);
     setMessage('Visit cancelled.');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
@@ -1367,13 +1379,14 @@ function AssistantCase() {
         <Printer size={17} />
         Print Prescription
       </button>
+      {(assistantCanCollectFees || assistantCanMarkComplete || visitAlreadyComplete) && (
       <MobileSection title="Fees Collection">
         <form className="mobile-form" onSubmit={closeAssistantWork}>
           <div className="inline-fields">
-            <Input name="feesCollected" label="Fees collected" placeholder="1500" disabled={!assistantCanCollectFees || visitAlreadyComplete} />
+            <Input name="feesCollected" label="Fees collected" placeholder="1500" required disabled={!assistantCanCollectFees || visitAlreadyComplete} />
             <label className="field">
-              <span>Payment mode</span>
-              <select name="paymentMode" value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)} disabled={!assistantCanCollectFees || visitAlreadyComplete}>
+              <span>Payment mode<b className="required-star">*</b></span>
+              <select name="paymentMode" value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)} required disabled={!assistantCanCollectFees || visitAlreadyComplete}>
                 <option value="Cash">Cash</option>
                 <option value="UPI">UPI</option>
               </select>
@@ -1395,12 +1408,13 @@ function AssistantCase() {
           </button>
         </form>
       </MobileSection>
+      )}
       {visitAlreadyComplete ? (
         <div className="notice">Visit is complete. No further assistant action is required.</div>
       ) : visitCancelled ? (
         <div className="notice warning-notice">Visit is cancelled.</div>
       ) : !assistantCanCollectFees && !assistantCanMarkComplete && (
-        <button className="cancel-visit-button" type="button" onClick={cancelVisit}>
+        <button className="cancel-visit-button" type="button" onClick={() => setConfirmCancelVisit(true)}>
           <Trash2 size={18} />
           Cancel Visit
         </button>
@@ -1413,6 +1427,18 @@ function AssistantCase() {
             <div>
               <button type="button" onClick={() => setConfirmFeesComplete(null)}>Cancel</button>
               <button type="button" onClick={saveFeesAndComplete}>Confirm Submit</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmCancelVisit && (
+        <div className="confirm-overlay fixed-confirm" role="dialog" aria-modal="true">
+          <div className="confirm-card">
+            <strong>Cancel visit?</strong>
+            <p>Are you sure you want to cancel this scheduled appointment? The appointment time slot will be released.</p>
+            <div>
+              <button type="button" onClick={() => setConfirmCancelVisit(false)}>No</button>
+              <button type="button" onClick={cancelVisit}>Yes, Cancel Visit</button>
             </div>
           </div>
         </div>
@@ -1458,6 +1484,7 @@ function DoctorCase() {
   const [message, setMessage] = useState('');
   const [confirmDoctorEdit, setConfirmDoctorEdit] = useState(null);
   const [confirmDoctorCancel, setConfirmDoctorCancel] = useState(false);
+  const [confirmDoctorSubmit, setConfirmDoctorSubmit] = useState(null);
 
   useEffect(() => {
     if (item?.doctor?.prescriptionItems?.length) {
@@ -1470,6 +1497,7 @@ function DoctorCase() {
     payload.prescriptionItems = prescriptionItems;
     try {
       await apiPost(`/cases/${caseId}/doctor-submit`, payload, 'PATCH');
+      setConfirmDoctorSubmit(null);
       broadcastClinicRefresh();
       navigate('/doctor/queue');
     } catch (error) {
@@ -1485,7 +1513,7 @@ function DoctorCase() {
       setConfirmDoctorEdit(payload);
       return;
     }
-    await saveDoctorCase(payload);
+    setConfirmDoctorSubmit(payload);
   };
 
   const cancelDoctorCase = async () => {
@@ -1521,10 +1549,22 @@ function DoctorCase() {
         </MobileSection>
         <div className="sticky-actions">
           <button className="secondary-button" type="button" onClick={() => printPrescription({ ...item, doctor: { ...item.doctor, testsRequested: selectedTests.map((test) => test.name), prescriptionItems } })}><Printer size={18} />Print</button>
-          <button className="secondary-button danger-action" type="button" onClick={() => setConfirmDoctorCancel(true)}><Trash2 size={18} />Cancel Case</button>
           <button className="primary-button" type="submit"><CheckCircle2 size={18} />Submit Case</button>
+          <button className="secondary-button danger-action" type="button" onClick={() => setConfirmDoctorCancel(true)}><Trash2 size={18} />Cancel Case</button>
         </div>
       </form>
+      {confirmDoctorSubmit && (
+        <div className="confirm-overlay fixed-confirm" role="dialog" aria-modal="true">
+          <div className="confirm-card">
+            <strong>Submit case?</strong>
+            <p>Once submitted, this case will move to Fees Collection for Assistant billing.</p>
+            <div>
+              <button type="button" onClick={() => setConfirmDoctorSubmit(null)}>Cancel</button>
+              <button type="button" onClick={() => saveDoctorCase(confirmDoctorSubmit)}>Confirm Submit</button>
+            </div>
+          </div>
+        </div>
+      )}
       {confirmDoctorEdit && (
         <div className="confirm-overlay fixed-confirm" role="dialog" aria-modal="true">
           <div className="confirm-card">
@@ -1732,6 +1772,24 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
   );
 }
 
+function DoctorBottomDock({ tabs = [] }) {
+  const navigate = useNavigate();
+  return (
+    <div className="assistant-bottom-dock doctor-bottom-dock">
+      <button type="button" onClick={() => navigate('/doctor/queue')}>
+        <Home size={18} />
+        <span>Home</span>
+      </button>
+      {tabs.map((tab) => (
+        <button type="button" key={tab.to} onClick={() => navigate(tab.to)}>
+          <tab.icon size={18} />
+          <span>{tab.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function CompactPatientRows({ loading, error, cases, onRefresh }) {
   const runCaseAction = async (id, action) => {
     await apiPost(`/cases/${id}/${action}`, {}, 'PATCH');
@@ -1844,7 +1902,8 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
     const doctorMatches = !doctorId || item.doctorId === doctorId;
     return statusMatches && doctorMatches;
   });
-  const openAppointments = visibleAppointments.filter((item) => isOpenAppointment(item));
+  const feesPendingAppointments = visibleAppointments.filter((item) => isFeesPendingAppointment(item));
+  const openAppointments = visibleAppointments.filter((item) => isOpenAppointment(item) && !isFeesPendingAppointment(item));
   const closedAppointments = visibleAppointments.filter((item) => isClosedAppointment(item));
   const cancelledAppointments = visibleAppointments.filter((item) => isCancelledAppointment(item));
   const editAppointment = (item) => {
@@ -1889,8 +1948,9 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
         {loading && <p className="muted">Loading appointments...</p>}
         {message && <p className="queue-message">{message}</p>}
         {renderRows(openAppointments, 'Open Cases')}
-        {renderRows(closedAppointments, 'Closed Cases', openAppointments.length)}
-        {renderRows(cancelledAppointments, 'Cancelled Cases', openAppointments.length + closedAppointments.length)}
+        {renderRows(feesPendingAppointments, 'Fees Collection', openAppointments.length)}
+        {renderRows(closedAppointments, 'Closed Cases', openAppointments.length + feesPendingAppointments.length)}
+        {renderRows(cancelledAppointments, 'Cancelled Cases', openAppointments.length + feesPendingAppointments.length + closedAppointments.length)}
       </div>
       {confirmAction && (
         <div className="confirm-overlay" role="dialog" aria-modal="true">
@@ -1984,8 +2044,8 @@ function AppointmentAction({ item, role, onAction }) {
   if (item.status === 'doctor_done') {
     return (
       <div className="appointment-action-stack">
-        <button className="send-appointment-button complete-action" type="button" onClick={(event) => onAction(event, item, 'complete', 'Mark this appointment as Complete?')} draggable={false}>
-          Complete
+        <button className="send-appointment-button muted-action" type="button" onClick={(event) => onAction(event, item, 'edit')} draggable={false}>
+          Fees
         </button>
       </div>
     );
@@ -2629,6 +2689,9 @@ function MedicineSelector({ prescriptionItems, setPrescriptionItems }) {
     if (!prescriptionItems.some((item) => item.id === medicine.id)) {
       setPrescriptionItems([...prescriptionItems, {
         ...medicine,
+        selectedStrength: firstMasterOption(medicine.strength || medicine.description),
+        selectedDosageForm: firstMasterOption(medicine.dosageForm),
+        selectedUse: firstMasterOption(medicine.commonUse || medicine.condition),
         dosePattern: medicine.dosePattern || '1 - 1 - 1',
         doseSuggestion: medicine.doseSuggestion || medicine.description || ''
       }]);
@@ -2682,12 +2745,30 @@ function SelectionBox({ items, onRemove, onDoseChange, empty }) {
           {onDoseChange && (
             <div className="dose-controls">
               <label>
+                <span>Strength</span>
+                <select value={item.selectedStrength || firstMasterOption(item.strength || item.description)} onChange={(event) => onDoseChange(item.id, { selectedStrength: event.target.value })}>
+                  {masterOptions(item.strength || item.description).map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Form</span>
+                <select value={item.selectedDosageForm || firstMasterOption(item.dosageForm)} onChange={(event) => onDoseChange(item.id, { selectedDosageForm: event.target.value })}>
+                  {masterOptions(item.dosageForm).map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Use</span>
+                <select value={item.selectedUse || firstMasterOption(item.commonUse || item.condition)} onChange={(event) => onDoseChange(item.id, { selectedUse: event.target.value })}>
+                  {masterOptions(item.commonUse || item.condition).map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="dose-time-control">
                 <span>Dose time</span>
                 <select value={item.dosePattern || '1 - 1 - 1'} onChange={(event) => onDoseChange(item.id, { dosePattern: event.target.value })}>
                   {DOSE_PATTERNS.map((pattern) => <option key={pattern} value={pattern}>{pattern}</option>)}
                 </select>
               </label>
-              <label>
+              <label className="dose-suggestion-control">
                 <span>Suggestion</span>
                 <input value={item.doseSuggestion || ''} onChange={(event) => onDoseChange(item.id, { doseSuggestion: event.target.value })} placeholder="After food, 5 days" maxLength={120} />
               </label>
@@ -2916,7 +2997,7 @@ function DoctorOutputPanel({ item }) {
       <div className="doctor-prescription-box">
         <span>Prescription</span>
         {doctor.prescriptionItems?.length ? (
-          <ul>{doctor.prescriptionItems.map((medicine) => <li key={medicine.id}>{medicine.name}: {medicine.description}</li>)}</ul>
+          <ul>{doctor.prescriptionItems.map((medicine) => <li key={medicine.id}>{formatMedicineDoseLine(medicine)}</li>)}</ul>
         ) : (
           <p>{doctor.prescription || 'No prescription added yet.'}</p>
         )}
@@ -3070,7 +3151,7 @@ function TextAreaInput({ label, wide = true, value, name, required, placeholder,
 
   return (
     <label className={wide ? 'field wide textarea-field' : 'field textarea-field'}>
-      <span>{label}{required && <b className="required-star">*</b>}<small>{maxLength} max</small></span>
+      <span><span className="field-label-main">{label}{required && <b className="required-star">*</b>}</span><small>{maxLength} max</small></span>
       <textarea
         name={name}
         defaultValue={value || ''}
@@ -3191,9 +3272,14 @@ function isOpenAppointment(item) {
   return !isClosedAppointment(item) && !isCancelledAppointment(item);
 }
 
+function isFeesPendingAppointment(item) {
+  return item?.status === 'doctor_done' || item?.visitStatus === 'doctor_done';
+}
+
 function appointmentStatusLabel(item) {
   if (isCancelledAppointment(item)) return 'Cancelled';
   if (isClosedAppointment(item)) return 'Closed';
+  if (isFeesPendingAppointment(item)) return 'Fees Pending';
   if (['waiting', 'scheduled'].includes(item?.status)) return 'Scheduled';
   return formatStatus(item.status);
 }
@@ -3202,7 +3288,8 @@ function caseStatusLabel(item) {
   if (item.status === 'cancelled') return 'Cancelled';
   if (item.status === 'completed' || item.visitStatus === 'visit_complete') return 'Closed';
   if (item.status === 'doctor_queue') return 'Open - Doctor Queue';
-  if (item.status === 'assistant_closure') return 'Open - Fees Queue';
+  if (item.status === 'assistant_closure' && item.visitStatus === 'doctor_done') return 'Open - Fees Pending';
+  if (item.status === 'assistant_closure') return 'Fees Collected';
   if (item.status === 'assistant_intake') return 'Open - Scheduled';
   return formatStatus(item.status);
 }
@@ -3237,8 +3324,25 @@ function formatPrescriptionLine(doctor = {}) {
 
 function formatMedicineDoseLine(medicine = {}) {
   const dose = medicine.dosePattern ? ` [${medicine.dosePattern}]` : '';
+  const masterDetails = [
+    medicine.selectedStrength,
+    medicine.selectedDosageForm,
+    medicine.selectedUse
+  ].filter((value) => value && value !== '-').join(' - ');
   const suggestion = medicine.doseSuggestion || medicine.description || medicine.generic || '';
-  return `${medicine.name || 'Medicine'}${dose}${suggestion ? `: ${suggestion}` : ''}`;
+  return `${medicine.name || 'Medicine'}${masterDetails ? ` - ${masterDetails}` : ''}${dose}${suggestion ? `: ${suggestion}` : ''}`;
+}
+
+function masterOptions(value = '') {
+  const options = String(value || '')
+    .split(/\s*(?:\/|\||,)\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return options.length ? [...new Set(options)] : ['-'];
+}
+
+function firstMasterOption(value = '') {
+  return masterOptions(value)[0] || '-';
 }
 
 function formatDateTime(value) {
@@ -3344,6 +3448,8 @@ function saveDraft(payload) {
 
 function formatStatus(status) {
   if (status === 'doctor_queue') return "Doctor's Queue";
+  if (status === 'doctor_done') return 'Fees Collection';
+  if (status === 'assistant_closure') return 'Fees Pending';
   return String(status || '').split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 }
 
