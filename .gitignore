@@ -3,4 +3,5 @@ dist
 .env
 server/data/*.local.json
 server/*.log
+*.log
 npm-debug.log*
