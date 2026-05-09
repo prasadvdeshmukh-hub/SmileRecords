@@ -1,5 +1,7 @@
 import cors from 'cors';
 import express from 'express';
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +11,8 @@ const app = express();
 const port = process.env.PORT || 4000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = process.env.SMILE_RECORDS_DATA_FILE || join(__dirname, 'data', 'smile-records.local.json');
-let db = loadDb();
+const storage = createStorage();
+let db = await loadDb();
 
 app.use(cors());
 app.use(express.json());
@@ -20,14 +23,14 @@ app.get('/api/health', (req, res) => {
     ok: true,
     app: 'SmileRecords',
     version: '0.3.0',
-    storage: 'json-file',
-    dataFile: DATA_FILE
+    storage: storage.mode,
+    dataFile: storage.mode === 'json-file' ? DATA_FILE : undefined,
+    firestoreDocument: storage.mode === 'firestore' ? storage.documentPath : undefined
   });
 });
 
 app.post('/api/admin/reset-data', (req, res) => {
-  db = clone(seed);
-  db.audit = normalizeAuditRecords(db.audit || []);
+  db = prepareDb(seed);
   log('ADMIN_RESET_DATA', req.body.actor || 'Admin', 'SmileRecords');
   res.json({ ok: true, message: 'SmileRecords data reset to seed values' });
 });
@@ -1269,30 +1272,106 @@ function describeAuditEvent(action, entity) {
   return `${action.replaceAll('_', ' ').toLowerCase()} for ${entity || 'system record'}`;
 }
 
-function loadDb() {
+function createStorage() {
+  const firebaseCredential = parseFirebaseCredential();
+  if (firebaseCredential) {
+    if (!getApps().length) {
+      initializeApp({ credential: cert(firebaseCredential) });
+    }
+    const firestore = getFirestore();
+    const collection = process.env.FIREBASE_COLLECTION || 'smileRecords';
+    const document = process.env.FIREBASE_DOCUMENT || 'appState';
+    return {
+      mode: 'firestore',
+      documentPath: `${collection}/${document}`,
+      async load() {
+        const snapshot = await firestore.collection(collection).doc(document).get();
+        if (!snapshot.exists) {
+          const initial = prepareDb(seed);
+          await firestore.collection(collection).doc(document).set({
+            data: initial,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+          return initial;
+        }
+        return prepareDb(snapshot.data()?.data || {});
+      },
+      async save(value) {
+        await firestore.collection(collection).doc(document).set({
+          data: clone(value),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+    };
+  }
+
+  return {
+    mode: 'json-file',
+    documentPath: DATA_FILE,
+    async load() {
+      return loadJsonDb();
+    },
+    async save(value) {
+      mkdirSync(dirname(DATA_FILE), { recursive: true });
+      writeFileSync(DATA_FILE, JSON.stringify(value, null, 2));
+    }
+  };
+}
+
+function parseFirebaseCredential() {
+  const encoded = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+  if (encoded) {
+    try {
+      return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+    } catch (error) {
+      console.warn(`Could not parse FIREBASE_SERVICE_ACCOUNT_BASE64: ${error.message}`);
+    }
+  }
+
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  if (projectId && clientEmail && privateKey) {
+    return { projectId, clientEmail, privateKey };
+  }
+  return null;
+}
+
+async function loadDb() {
+  try {
+    return await storage.load();
+  } catch (error) {
+    console.warn(`Could not load SmileRecords ${storage.mode} storage, using seed data: ${error.message}`);
+    return prepareDb(seed);
+  }
+}
+
+function loadJsonDb() {
   mkdirSync(dirname(DATA_FILE), { recursive: true });
   if (!existsSync(DATA_FILE)) {
-    const initial = clone(seed);
-    initial.audit = normalizeAuditRecords(initial.audit || []);
-    initial.hospitals = initial.hospitals || [];
-    initial.doctorAssistantMappings = initial.doctorAssistantMappings || [];
+    const initial = prepareDb(seed);
     writeFileSync(DATA_FILE, JSON.stringify(initial, null, 2));
     return initial;
   }
 
   try {
     const parsed = JSON.parse(readFileSync(DATA_FILE, 'utf8'));
-    const merged = { ...clone(seed), ...parsed };
-    merged.audit = normalizeAuditRecords(merged.audit || []);
-    merged.hospitals = merged.hospitals?.length ? merged.hospitals : clone(seed).hospitals;
-    merged.doctorAssistantMappings = merged.doctorAssistantMappings || [];
-    return merged;
+    return prepareDb(parsed);
   } catch (error) {
     console.warn(`Could not read SmileRecords data file, using seed data: ${error.message}`);
-    const fallback = clone(seed);
-    fallback.audit = normalizeAuditRecords(fallback.audit || []);
-    return fallback;
+    return prepareDb(seed);
   }
+}
+
+function prepareDb(value) {
+  const merged = { ...clone(seed), ...clone(value || {}) };
+  merged.audit = normalizeAuditRecords(merged.audit || []);
+  merged.hospitals = merged.hospitals?.length ? merged.hospitals : clone(seed).hospitals;
+  merged.doctorAssistantMappings = merged.doctorAssistantMappings || [];
+  merged.notifications = merged.notifications || [];
+  merged.feeReconciliations = merged.feeReconciliations || [];
+  return merged;
 }
 
 function normalizeAuditRecords(records) {
@@ -1316,19 +1395,16 @@ function normalizeAuditRecords(records) {
 }
 
 function saveDb() {
-  mkdirSync(dirname(DATA_FILE), { recursive: true });
-  writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+  return storage.save(db);
 }
 
 function persistSuccessfulMutations(req, res, next) {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     res.on('finish', () => {
       if (res.statusCode < 400) {
-        try {
-          saveDb();
-        } catch (error) {
+        saveDb().catch((error) => {
           console.error(`Could not persist SmileRecords data: ${error.message}`);
-        }
+        });
       }
     });
   }

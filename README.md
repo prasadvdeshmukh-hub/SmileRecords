@@ -32,9 +32,45 @@ After Render finishes deployment, open:
 - App login: `https://YOUR-RENDER-SERVICE.onrender.com/login`
 - API health: `https://YOUR-RENDER-SERVICE.onrender.com/api/health`
 
-## Backend
+## Backend Storage
 
-The backend is an Express API with JSON-file persistence. On first run it creates:
+The backend is an Express API with Firebase Firestore support. If Firebase credentials are configured, `/api/health` shows `storage: "firestore"` and all app data is saved into one Firestore document. If Firebase is not configured, the app falls back to JSON-file persistence for local testing.
+
+### Firebase Free Database Setup
+
+Create a Firebase project, enable Firestore Database, then create a service account key from Firebase Console -> Project settings -> Service accounts.
+
+For Render/Replit, add either this single environment variable:
+
+```text
+FIREBASE_SERVICE_ACCOUNT_BASE64=<base64 encoded service-account-json>
+```
+
+Or add these three variables:
+
+```text
+FIREBASE_PROJECT_ID=<your-project-id>
+FIREBASE_CLIENT_EMAIL=<service-account-email>
+FIREBASE_PRIVATE_KEY=<service-account-private-key-with-\n-newlines>
+```
+
+Optional:
+
+```text
+FIREBASE_COLLECTION=smileRecords
+FIREBASE_DOCUMENT=appState
+```
+
+After deployment, open `/api/health`. It should show:
+
+```json
+{
+  "storage": "firestore",
+  "firestoreDocument": "smileRecords/appState"
+}
+```
+
+Without Firebase variables, local fallback creates:
 
 `server/data/smile-records.local.json`
 
