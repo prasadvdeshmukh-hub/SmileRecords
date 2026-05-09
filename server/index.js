@@ -14,6 +14,7 @@ const app = express();
 const port = process.env.PORT || 4000;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = process.env.SMILE_RECORDS_DATA_FILE || join(__dirname, 'data', 'smile-records.local.json');
+const IS_DEPLOYED_RUNTIME = process.env.RENDER || process.env.NODE_ENV === 'production';
 const storage = createStorage();
 let db = await loadDb();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -34,6 +35,11 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/admin/reset-data', (req, res) => {
+  if (IS_DEPLOYED_RUNTIME && process.env.ALLOW_DATA_RESET !== 'true') {
+    return res.status(403).json({
+      error: 'Data reset is disabled in deployed environments. Set ALLOW_DATA_RESET=true only for an intentional one-time reset.'
+    });
+  }
   db = prepareDb(seed);
   log('ADMIN_RESET_DATA', req.body.actor || 'Admin', 'SmileRecords');
   res.json({ ok: true, message: 'SmileRecords data reset to seed values' });
@@ -1406,6 +1412,12 @@ function createStorage() {
     };
   }
 
+  if (IS_DEPLOYED_RUNTIME) {
+    throw new Error(
+      'Firebase is required in deployed environments. Configure FIREBASE_SERVICE_ACCOUNT_BASE64 or FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY.'
+    );
+  }
+
   return {
     mode: 'json-file',
     documentPath: DATA_FILE,
@@ -1442,6 +1454,9 @@ async function loadDb() {
   try {
     return await storage.load();
   } catch (error) {
+    if (storage.mode === 'firestore' || IS_DEPLOYED_RUNTIME) {
+      throw new Error(`Could not load SmileRecords ${storage.mode} storage: ${error.message}`);
+    }
     console.warn(`Could not load SmileRecords ${storage.mode} storage, using seed data: ${error.message}`);
     return prepareDb(seed);
   }
