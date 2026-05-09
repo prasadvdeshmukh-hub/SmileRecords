@@ -57,10 +57,17 @@ app.get('/api/dashboard', (req, res) => {
 
 app.get('/api/cases', (req, res) => {
   let cases = db.cases;
-  if (req.query.queue === 'doctor') cases = cases.filter((item) => item.status === 'doctor_queue');
+  if (req.query.queue === 'doctor') cases = cases.filter((item) => item.status === 'doctor_queue' && item.visitStatus !== 'cancelled');
   if (req.query.queue === 'assistant-closure') cases = cases.filter((item) => item.status === 'assistant_closure' && item.visitStatus !== 'visit_complete');
   if (req.query.queue === 'assistant-intake') cases = cases.filter((item) => item.status === 'assistant_intake');
+  if (req.query.queue === 'closed') cases = cases.filter((item) => item.status === 'completed' || item.visitStatus === 'visit_complete');
+  if (req.query.queue === 'cancelled') cases = cases.filter((item) => item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled'));
   if (req.query.doctorId) cases = cases.filter((item) => item.assignedDoctorId === req.query.doctorId);
+  if (req.query.doctorEmail && req.query.scope === 'mapped') {
+    const doctor = findDoctor('', req.query.doctorEmail);
+    if (!doctor) return res.status(404).json({ error: 'Doctor not found' });
+    cases = cases.filter((item) => isCaseVisibleToDoctor(item, doctor));
+  }
   if (req.query.date) cases = cases.filter((item) => caseActivityDate(item) === req.query.date);
   res.json({ cases: cases.map(enrichCase) });
 });
@@ -127,17 +134,24 @@ app.get('/api/queue', (req, res) => {
 app.get('/api/appointments', (req, res) => {
   const selectedDate = req.query.date;
   const doctorId = String(req.query.doctorId || '').trim();
+  const doctor = findDoctor('', req.query.doctorEmail);
   let appointments = selectedDate
     ? db.appointments.filter((item) => appointmentDate(item) === selectedDate)
     : db.appointments;
   if (doctorId) appointments = appointments.filter((item) => item.doctorId === doctorId);
+  if (doctor && req.query.scope === 'mapped') {
+    appointments = appointments.filter((appointment) => {
+      const item = db.cases.find((caseItem) => caseItem.id === appointment.caseId || caseItem.queueNumber === appointment.queueNumber);
+      return item ? isCaseVisibleToDoctor(item, doctor) : appointment.doctorId === doctor.id;
+    });
+  }
   res.json({ appointments });
 });
 
 app.patch('/api/appointments/:id/send-to-doctor', (req, res) => {
   const appointment = db.appointments.find((item) => item.id === req.params.id);
   if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
-  if (appointment.status === 'complete') return res.status(409).json({ error: 'Completed appointment cannot be sent to doctor queue' });
+  if (isClosedAppointment(appointment)) return res.status(409).json({ error: 'Closed appointment cannot be changed' });
 
   const item = db.cases.find((caseItem) => caseItem.queueNumber === appointment.queueNumber);
   if (!item) return res.status(404).json({ error: 'Case not found for appointment' });
@@ -151,6 +165,7 @@ app.patch('/api/appointments/:id/send-to-doctor', (req, res) => {
 app.patch('/api/appointments/:id/recall-to-waiting', (req, res) => {
   const appointment = db.appointments.find((item) => item.id === req.params.id);
   if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
+  if (isClosedAppointment(appointment)) return res.status(409).json({ error: 'Closed appointment cannot be changed' });
 
   const item = db.cases.find((caseItem) => caseItem.queueNumber === appointment.queueNumber);
   if (!item) return res.status(404).json({ error: 'Case not found for appointment' });
@@ -166,6 +181,7 @@ app.patch('/api/appointments/:id/recall-to-waiting', (req, res) => {
 app.patch('/api/appointments/:id/doctor-done', (req, res) => {
   const appointment = db.appointments.find((item) => item.id === req.params.id);
   if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
+  if (isClosedAppointment(appointment)) return res.status(409).json({ error: 'Closed appointment cannot be changed' });
 
   const item = db.cases.find((caseItem) => caseItem.queueNumber === appointment.queueNumber);
   if (!item) return res.status(404).json({ error: 'Case not found for appointment' });
@@ -1182,6 +1198,23 @@ function sendCaseToDoctor(item) {
   db.queue.nowServing = item.queueNumber;
   db.queue.currentDoctorCaseId = item.id;
   db.queue.skippedNumbers = db.queue.skippedNumbers.filter((number) => number !== item.queueNumber);
+}
+
+function isClosedAppointment(appointment) {
+  return ['complete', 'completed', 'cancelled'].includes(appointment.status);
+}
+
+function isCaseVisibleToDoctor(item, doctor) {
+  if (!doctor || item.hospitalId !== doctor.hospitalId) return false;
+  if (item.assignedDoctorId === doctor.id) return true;
+  const mapping = getDoctorAssistantMapping(doctor);
+  if (!mapping.assistantIds?.length) return false;
+  const assistantIds = new Set(mapping.assistantIds);
+  if (item.assistantId && assistantIds.has(item.assistantId)) return true;
+  const mappedAssistantNames = db.users
+    .filter((user) => assistantIds.has(user.id))
+    .map((user) => user.name);
+  return mappedAssistantNames.includes(item.assistant?.intakeBy);
 }
 
 function nextId(prefix, value) {

@@ -90,6 +90,9 @@ async function run() {
   const assistantDoctorOptions = await request('/assistant-doctor-options?assistantEmail=assistant@test.smile');
   assert(assistantDoctorOptions.doctors.some((doctor) => doctor.email === 'doctor@test.smile'), 'Mapped assistant should see assigned doctor');
 
+  const mappedDoctorCases = await request('/cases?queue=doctor&doctorEmail=doctor@test.smile&scope=mapped');
+  assert(mappedDoctorCases.cases.every((item) => item.hospitalId === 'HOSP-1'), 'Mapped doctor queue should stay inside doctor hospital');
+
   const accessRequest = await request('/access-requests', {
     method: 'POST',
     body: JSON.stringify({
@@ -318,6 +321,10 @@ async function run() {
     body: JSON.stringify({ actor: 'Doctor' })
   });
   assert(cancelled.case.status === 'cancelled', 'Doctor cancel did not cancel case');
+  const doctorQueueAfterCancel = await request('/cases?queue=doctor&doctorEmail=doctor@test.smile&scope=mapped');
+  assert(!doctorQueueAfterCancel.cases.some((item) => item.id === cancelIntake.case.id), 'Cancelled case should not remain in doctor queue');
+  const cancelledQueue = await request('/cases?queue=cancelled');
+  assert(cancelledQueue.cases.some((item) => item.id === cancelIntake.case.id), 'Cancelled case should appear in cancelled queue');
 
   const createdTest = await request('/tests', {
     method: 'POST',

@@ -372,7 +372,6 @@ function MobileShell({ role }) {
     : [
         { to: '/assistant/dashboard', label: 'Dashboard', icon: Gauge },
         { to: '/assistant/intake', label: 'Appointments', icon: FilePlus2 },
-        { to: '/assistant/patients', label: 'Patients', icon: Search },
         { to: '/assistant/fees', label: 'Fees', icon: ReceiptIndianRupee },
         { to: '/assistant/reconciliation', label: 'Fees Reconciliation', icon: CheckCircle2 }
       ];
@@ -846,9 +845,9 @@ function PatientHistoryDays({ historyDays = [], compact = false }) {
   );
 }
 
-function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, label = 'Today Status', scopeStatus = '', doctorId = '' }) {
+function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, label = 'Today Status', scopeStatus = '', doctorId = '', doctorEmail = '' }) {
   const [refresh, setRefresh] = useState(0);
-  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}`;
+  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}`;
   const { data, loading } = useApi(appointmentPath, refresh);
   const appointments = data?.appointments || [];
   const scopedAppointments = scopeStatus ? appointments.filter((item) => item.status === scopeStatus) : appointments;
@@ -873,7 +872,8 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
     { label: 'Waiting', status: 'waiting', value: counts.waiting || 0 },
     { label: 'Doctor Queue', status: 'doctor_queue', value: counts.doctor_queue || 0 },
     { label: 'Doctor Done', status: 'doctor_done', value: counts.doctor_done || 0 },
-    { label: 'Complete', status: 'complete', value: counts.complete || 0 }
+    { label: 'Closed', status: 'complete', value: counts.complete || 0 },
+    { label: 'Cancelled', status: 'cancelled', value: counts.cancelled || 0 }
   ];
 
   return (
@@ -1410,10 +1410,11 @@ function AssistantCase() {
 
 function DoctorQueue() {
   const currentUser = getStoredUser();
-  const { data, loading, error } = useApi('/cases?queue=doctor');
   const [selectedDate, setSelectedDate] = useState(todayDate());
   const [tab, setTab] = useState('my');
   const dashboardStatus = tab === 'my' ? 'doctor_queue' : 'all';
+  const doctorId = tab === 'my' ? currentUser?.id : '';
+  const mappedScope = tab === 'overall' ? currentUser?.email : '';
   return (
     <MobilePage title="Doctor Queue" subtitle="Appointments sent by assistant for consultation." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       <div className="doctor-tabs">
@@ -1426,9 +1427,10 @@ function DoctorQueue() {
         onStatusChange={() => {}}
         label={tab === 'my' ? 'My Queue Status - Live' : 'Overall Queue Status - Live'}
         scopeStatus={tab === 'my' ? 'doctor_queue' : ''}
-        doctorId={tab === 'my' ? currentUser?.id : ''}
+        doctorId={doctorId}
+        doctorEmail={mappedScope}
       />
-      <AppointmentCalendar compact role="doctor" statusFilter={tab === 'my' ? 'doctor_queue' : 'all'} selectedDate={selectedDate} doctorId={tab === 'my' ? currentUser?.id : ''} />
+      <AppointmentCalendar compact role="doctor" statusFilter={tab === 'my' ? 'doctor_queue' : 'all'} selectedDate={selectedDate} doctorId={doctorId} doctorEmail={mappedScope} />
     </MobilePage>
   );
 }
@@ -1760,9 +1762,9 @@ function CompactPatientRows({ loading, error, cases, onRefresh }) {
   );
 }
 
-function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role = 'assistant', doctorId = '' }) {
+function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role = 'assistant', doctorId = '', doctorEmail = '' }) {
   const [refresh, setRefresh] = useState(0);
-  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}`;
+  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}`;
   const { data, loading } = useApi(appointmentPath, refresh);
   const [appointments, setAppointments] = useState([]);
   const [dragIndex, setDragIndex] = useState(null);
@@ -1797,7 +1799,7 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
 
   const executeAppointmentAction = async (item, action) => {
     if (action === 'locked-edit') {
-      setMessage('Doctor has completed this case. Assistant cannot edit it now; only Doctor can edit after confirmation.');
+      setMessage('Closed case cannot be edited.');
       return;
     }
     if (action === 'edit') {
@@ -1809,9 +1811,6 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
       return;
     }
     const result = await apiPost(`/appointments/${item.id}/${action}`, { actor: role === 'doctor' ? 'Doctor' : 'Assistant' }, 'PATCH');
-    setAppointments((current) => current.map((record) => (
-      record.id === item.id ? { ...record, status: result.appointment.status } : record
-    )));
     setMessage(`No. ${item.queueNumber} updated to ${formatStatus(result.appointment.status)}.`);
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
@@ -1831,8 +1830,15 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
     const doctorMatches = !doctorId || item.doctorId === doctorId;
     return statusMatches && doctorMatches;
   });
+  const openAppointments = visibleAppointments.filter((item) => isOpenAppointment(item));
+  const closedAppointments = visibleAppointments.filter((item) => isClosedAppointment(item));
+  const cancelledAppointments = visibleAppointments.filter((item) => isCancelledAppointment(item));
   const editAppointment = (item) => {
     if (role !== 'assistant') return;
+    if (isClosedAppointment(item) || isCancelledAppointment(item)) {
+      setMessage('Closed or cancelled case cannot be edited.');
+      return;
+    }
     if (isDoctorLockedAppointment(item)) {
       setMessage('Doctor has completed this case. Assistant cannot edit it now; only Doctor can edit after confirmation.');
       return;
@@ -1840,41 +1846,37 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
     setConfirmAction({ item, action: 'edit', message: `Are you sure you want to edit ${item.patientName}'s details?` });
   };
 
+  const renderRows = (rows, sectionName, offset = 0) => (
+    <div className="appointment-section">
+      <header>
+        <strong>{sectionName}</strong>
+        <span>{rows.length}</span>
+      </header>
+      {rows.length ? rows.map((item, index) => (
+        <AppointmentRow
+          key={item.id}
+          item={item}
+          index={index + offset}
+          role={role}
+          dragIndex={dragIndex}
+          setDragIndex={setDragIndex}
+          moveAppointment={moveAppointment}
+          editAppointment={editAppointment}
+          updateAppointment={updateAppointment}
+          navigate={navigate}
+        />
+      )) : <p className="muted">No {sectionName.toLowerCase()}.</p>}
+    </div>
+  );
+
   return (
     <section className={compact ? 'appointment-card compact' : 'appointment-card'}>
       <div className="appointment-list">
         {loading && <p className="muted">Loading appointments...</p>}
         {message && <p className="queue-message">{message}</p>}
-        {visibleAppointments.map((item, index) => (
-          <div
-            className={dragIndex === index ? 'appointment-row dragging' : 'appointment-row'}
-            draggable
-            key={item.id}
-            onDragStart={() => setDragIndex(index)}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => moveAppointment(dragIndex, index)}
-            onDragEnd={() => setDragIndex(null)}
-            onDoubleClick={() => editAppointment(item)}
-            onClick={() => {
-              if (role === 'doctor' && item.caseId) navigate(`/doctor/case/${item.caseId}`);
-            }}
-          >
-            <div className="appointment-number">{index + 1}</div>
-            <time>{item.time}</time>
-            <div className="appointment-main">
-              <div className="appointment-line primary-line">
-                <strong className="appointment-name">{item.patientName}</strong>
-              </div>
-              <div className="appointment-line secondary-line">
-                <span>{item.type}</span>
-              </div>
-            </div>
-            <div className="appointment-send-cell">
-              <Status value={formatStatus(item.status)} />
-              <AppointmentAction item={item} role={role} onAction={updateAppointment} />
-            </div>
-          </div>
-        ))}
+        {renderRows(openAppointments, 'Open Cases')}
+        {renderRows(closedAppointments, 'Closed Cases', openAppointments.length)}
+        {renderRows(cancelledAppointments, 'Cancelled Cases', openAppointments.length + closedAppointments.length)}
       </div>
       {confirmAction && (
         <div className="confirm-overlay" role="dialog" aria-modal="true">
@@ -1900,7 +1902,44 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
   );
 }
 
+function AppointmentRow({ item, index, role, dragIndex, setDragIndex, moveAppointment, editAppointment, updateAppointment, navigate }) {
+  const locked = isClosedAppointment(item) || isCancelledAppointment(item);
+  const statusText = appointmentStatusLabel(item);
+  return (
+    <div
+      className={`${dragIndex === index ? 'appointment-row dragging' : 'appointment-row'}${locked ? ' locked-row' : ''}`}
+      draggable={!locked}
+      onDragStart={() => !locked && setDragIndex(index)}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={() => !locked && moveAppointment(dragIndex, index)}
+      onDragEnd={() => setDragIndex(null)}
+      onDoubleClick={() => editAppointment(item)}
+      onClick={() => {
+        if (role === 'doctor' && item.caseId && !isCancelledAppointment(item)) navigate(`/doctor/case/${item.caseId}`);
+      }}
+    >
+      <div className="appointment-number">{index + 1}</div>
+      <time>{item.time}</time>
+      <div className="appointment-main">
+        <div className="appointment-line primary-line">
+          <strong className="appointment-name">{item.patientName}</strong>
+        </div>
+        <div className="appointment-line secondary-line">
+          <Status value={statusText} />
+          <span>{item.type}</span>
+        </div>
+      </div>
+      <div className="appointment-send-cell">
+        <AppointmentAction item={item} role={role} onAction={updateAppointment} />
+      </div>
+    </div>
+  );
+}
+
 function AppointmentAction({ item, role, onAction }) {
+  if (isClosedAppointment(item) || isCancelledAppointment(item)) {
+    return <span className="locked-action">{isCancelledAppointment(item) ? 'Cancelled' : 'Closed'}</span>;
+  }
   if (role === 'doctor') {
     if (item.status === 'doctor_queue' || item.status === 'waiting') {
       return (
@@ -2550,7 +2589,7 @@ function QueueList({ loading, error, cases, toPrefix, empty }) {
             <span>{item.patient.mobile} - {item.patient.city || 'No city'}</span>
           </div>
           <div className="case-meta">
-            <Status value={formatStatus(item.status)} />
+            <Status value={caseStatusLabel(item)} />
             <small>{item.id}</small>
           </div>
           <p>{item.patient.chiefComplaint || item.doctor?.diagnosis || 'No complaint added'}</p>
@@ -2855,7 +2894,34 @@ function canAssistantCloseVisit(item) {
 }
 
 function isDoctorLockedAppointment(item) {
-  return ['doctor_done', 'complete'].includes(item.status);
+  return ['doctor_done', 'complete', 'completed', 'cancelled'].includes(item.status);
+}
+
+function isClosedAppointment(item) {
+  return ['complete', 'completed'].includes(item?.status) || item?.visitStatus === 'visit_complete';
+}
+
+function isCancelledAppointment(item) {
+  return item?.status === 'cancelled' || String(item?.visitStatus || '').includes('cancelled');
+}
+
+function isOpenAppointment(item) {
+  return !isClosedAppointment(item) && !isCancelledAppointment(item);
+}
+
+function appointmentStatusLabel(item) {
+  if (isCancelledAppointment(item)) return 'Cancelled';
+  if (isClosedAppointment(item)) return 'Closed';
+  return formatStatus(item.status);
+}
+
+function caseStatusLabel(item) {
+  if (item.status === 'cancelled') return 'Cancelled';
+  if (item.status === 'completed' || item.visitStatus === 'visit_complete') return 'Closed';
+  if (item.status === 'doctor_queue') return 'Open - Doctor Queue';
+  if (item.status === 'assistant_closure') return 'Open - Fees Queue';
+  if (item.status === 'assistant_intake') return 'Open - Waiting';
+  return formatStatus(item.status);
 }
 
 function formToBasic(form) {
