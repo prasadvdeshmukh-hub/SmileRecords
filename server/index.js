@@ -3,9 +3,11 @@ import 'dotenv/config';
 import express from 'express';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import multer from 'multer';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import XLSX from 'xlsx';
 import { seed } from './seed.js';
 
 const app = express();
@@ -14,6 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = process.env.SMILE_RECORDS_DATA_FILE || join(__dirname, 'data', 'smile-records.local.json');
 const storage = createStorage();
 let db = await loadDb();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 app.use(cors());
 app.use(express.json());
@@ -303,7 +306,7 @@ app.post('/api/cases', (req, res) => {
     time: appointmentTime,
     patientName: patientRecord.name,
     type: patient.chiefComplaint || 'Consult',
-    status: 'waiting',
+    status: 'scheduled',
     queueNumber: item.queueNumber,
     doctorId: assignedDoctor?.id || '',
     doctorName: assignedDoctor?.name || ''
@@ -729,6 +732,31 @@ app.get('/api/doctor-assistant-mappings', (req, res) => {
   });
 });
 
+app.get('/api/doctor-assistant-mappings-master', (req, res) => {
+  const doctors = db.users
+    .filter((user) => user.role === 'Doctor' && user.status === 'Active')
+    .map((user) => withHospital(user));
+  const assistants = db.users
+    .filter((user) => user.role === 'Assistant' && user.status === 'Active')
+    .map((user) => withHospital(user));
+  const mappings = doctors.map((doctor) => {
+    const mapping = getDoctorAssistantMapping(doctor);
+    const mappedAssistants = assistants.filter((assistant) => mapping.assistantIds?.includes(assistant.id));
+    return {
+      id: mapping.id,
+      doctorId: doctor.id,
+      doctorName: doctor.name,
+      doctorEmail: doctor.email,
+      hospitalId: doctor.hospitalId,
+      hospitalName: doctor.hospitalName,
+      assistantIds: mapping.assistantIds || [],
+      assistants: mappedAssistants,
+      updatedAt: mapping.updatedAt
+    };
+  });
+  res.json({ doctors, assistants, mappings });
+});
+
 app.get('/api/assistant-doctor-options', (req, res) => {
   const assistant = findAssistant(req.query.assistantId, req.query.assistantEmail);
   if (!assistant) return res.status(404).json({ error: 'Assistant not found' });
@@ -849,6 +877,40 @@ app.delete('/api/roles/:id', (req, res) => {
 
 app.get('/api/medicines', (req, res) => {
   res.json({ medicines: db.medicines });
+});
+
+app.get('/api/medicines/template.xlsx', (req, res) => {
+  sendWorkbook(res, medicineWorkbook([
+    {
+      Name: 'Amoxicillin 500mg',
+      Generic: 'Amoxicillin',
+      Description: '1 capsule three times daily after food for 5 days'
+    },
+    {
+      Name: 'Ibuprofen 400mg',
+      Generic: 'Ibuprofen',
+      Description: '1 tablet twice daily after food for pain'
+    }
+  ]), 'SmileRecords_Medicine_Upload_Template.xlsx');
+});
+
+app.get('/api/medicines/export.xlsx', (req, res) => {
+  const rows = db.medicines.map((medicine) => ({
+    Id: medicine.id,
+    Name: medicine.name,
+    Generic: medicine.generic || '',
+    Description: medicine.description || ''
+  }));
+  sendWorkbook(res, medicineWorkbook(rows.length ? rows : [{ Id: '', Name: '', Generic: '', Description: '' }]), 'SmileRecords_Medicines.xlsx');
+});
+
+app.post('/api/medicines/bulk-upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Upload an Excel file first' });
+  const rows = parseMedicineWorkbook(req.file.buffer);
+  if (!rows.length) return res.status(400).json({ error: 'No medicine rows found in uploaded file' });
+  const result = upsertMedicines(rows);
+  log('ADMIN_BULK_UPLOAD_MEDICINES', req.body.actor || 'Admin', `${result.created} created, ${result.updated} updated`, { entityType: 'Medicine', entityId: 'bulk-upload' });
+  res.json(result);
 });
 
 app.post('/api/medicines', (req, res) => {
@@ -1096,7 +1158,11 @@ function formatStatusText(value = '') {
 }
 
 function formatPrescription(items) {
-  return (items || []).map((item) => `${item.name} - ${item.description || item.generic || ''}`.trim()).join('; ');
+  return (items || []).map((item) => {
+    const dose = item.dosePattern ? ` [${item.dosePattern}]` : '';
+    const suggestion = item.doseSuggestion || item.description || item.generic || '';
+    return `${item.name}${dose}${suggestion ? ` - ${suggestion}` : ''}`.trim();
+  }).join('; ');
 }
 
 function limitText(value = '', maxLength = 300) {
@@ -1573,6 +1639,62 @@ function createMedicine(input) {
     generic: input.generic || '',
     description: input.description || ''
   };
+}
+
+function medicineWorkbook(rows) {
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(rows, { header: ['Id', 'Name', 'Generic', 'Description'] });
+  worksheet['!cols'] = [{ wch: 18 }, { wch: 30 }, { wch: 28 }, { wch: 55 }];
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Medicines');
+  return workbook;
+}
+
+function sendWorkbook(res, workbook, filename) {
+  const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
+}
+
+function parseMedicineWorkbook(buffer) {
+  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const firstSheet = workbook.SheetNames[0];
+  if (!firstSheet) return [];
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: '' });
+  return rows
+    .map((row) => ({
+      id: row.Id || row.ID || row.id || '',
+      name: row.Name || row.Medicine || row['Medicine Name'] || row.name || '',
+      generic: row.Generic || row.generic || '',
+      description: row.Description || row.Dosage || row.Instructions || row.description || ''
+    }))
+    .filter((row) => String(row.name || '').trim());
+}
+
+function upsertMedicines(rows) {
+  let created = 0;
+  let updated = 0;
+  const medicines = [];
+  for (const row of rows) {
+    const existing = row.id
+      ? db.medicines.find((medicine) => medicine.id === String(row.id).trim())
+      : db.medicines.find((medicine) => sameText(medicine.name, row.name));
+    if (existing) {
+      Object.assign(existing, {
+        name: String(row.name || existing.name).trim(),
+        generic: String(row.generic || '').trim(),
+        description: String(row.description || '').trim()
+      });
+      updated += 1;
+      medicines.push(existing);
+    } else {
+      const medicine = createMedicine(row);
+      db.medicines.unshift(medicine);
+      created += 1;
+      medicines.push(medicine);
+    }
+  }
+  return { created, updated, total: rows.length, medicines };
 }
 
 function createTemplate(input) {

@@ -19,10 +19,12 @@
     "express": "^5.2.1",
     "firebase-admin": "^13.9.0",
     "lucide-react": "^0.561.0",
+    "multer": "^2.1.1",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-router-dom": "^7.10.1",
-    "vite": "^7.2.7"
+    "vite": "^7.2.7",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

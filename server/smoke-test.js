@@ -1,5 +1,14 @@
 const API_URL = process.env.API_URL || 'http://localhost:4000/api';
 
+async function requestRaw(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, options);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(`${options.method || 'GET'} ${path} failed: ${response.status} ${payload.error || ''}`);
+  }
+  return response;
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -58,6 +67,10 @@ async function run() {
 
   const medicineMaster = await request('/medicines');
   assert(medicineMaster.medicines.length === 45, 'Dental medicine master should contain 45 records from workbook');
+  const medicineTemplate = await requestRaw('/medicines/template.xlsx');
+  assert(medicineTemplate.headers.get('content-type')?.includes('spreadsheetml'), 'Medicine template should download as Excel');
+  const medicineExport = await requestRaw('/medicines/export.xlsx');
+  assert(medicineExport.headers.get('content-type')?.includes('spreadsheetml'), 'Medicine export should download as Excel');
 
   const hospitals = await request('/hospitals');
   assert(hospitals.hospitals.length >= 2, 'Hospital master should contain sample hospitals');

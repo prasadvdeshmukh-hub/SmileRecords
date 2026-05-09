@@ -47,6 +47,7 @@ const SESSION_KEY = 'smileRecordsCurrentUser';
 const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'Prefer not to say'];
 const TREATMENT_STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed', 'Follow-up Required', 'Referred'];
 const DOCTOR_TEXT_LIMIT = 300;
+const DOSE_PATTERNS = ['1 - X - X', 'X - 1 - X', 'X - X - 1', '1 - 1 - X', '1 - X - 1', 'X - 1 - 1', '1 - 1 - 1'];
 
 const PROFILE_COPY = {
   assistant: { name: 'Assistant', home: '/assistant/intake', greeting: 'Ready for intake and dispatch' },
@@ -186,8 +187,9 @@ function App() {
           <Route path="cases" element={<AdminListing title="All Cases" endpoint="/cases" icon={ClipboardList} />} />
           <Route path="approvals" element={<AdminApprovals />} />
           <Route path="hospitals" element={<HospitalMasterAdmin />} />
+          <Route path="doctor-assistant-mappings" element={<DoctorAssistantMappingAdmin />} />
           <Route path="roles" element={<AdminListing title="Role Creation" endpoint="/roles" icon={ShieldCheck} />} />
-          <Route path="medicines" element={<AdminListing title="Medicine Master" endpoint="/medicines" icon={Pill} />} />
+          <Route path="medicines" element={<MedicineMasterAdmin />} />
           <Route path="tests" element={<TestMasterAdmin />} />
           <Route path="templates" element={<AdminListing title="Prescription Forms" endpoint="/templates" icon={NotebookTabs} />} />
           <Route path="analytics" element={<Analytics />} />
@@ -344,6 +346,7 @@ function MobileShell({ role }) {
   const [refresh, setRefresh] = useState(0);
   const { data } = useApi(queuePath, refresh);
   const { data: notificationData } = useApi(`/notifications?email=${encodeURIComponent(currentUser?.email || '')}`, refresh);
+  const feesPendingCount = isDoctor ? 0 : (data?.cases?.length ?? 0);
   const queueCount = (data?.cases?.length ?? 0) + ((notificationData?.notifications || []).filter((item) => item.status !== 'Read').length);
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -372,7 +375,7 @@ function MobileShell({ role }) {
     : [
         { to: '/assistant/dashboard', label: 'Dashboard', icon: Gauge },
         { to: '/assistant/intake', label: 'Appointments', icon: FilePlus2 },
-        { to: '/assistant/fees', label: 'Fees', icon: ReceiptIndianRupee },
+        { to: '/assistant/fees', label: 'Fees', icon: ReceiptIndianRupee, badge: feesPendingCount },
         { to: '/assistant/reconciliation', label: 'Fees Reconciliation', icon: CheckCircle2 }
       ];
   const bottomTabs = isDoctor
@@ -423,7 +426,7 @@ function MobileShell({ role }) {
           ))}
         </nav>
       ) : (
-        <AssistantBottomDock />
+        <AssistantBottomDock feesPendingCount={feesPendingCount} />
       )}
     </div>
   );
@@ -447,6 +450,7 @@ function MobileProfileMenu({ role, tabs, onClose, onLogout }) {
         >
           <item.icon size={17} />
           <span>{item.label}</span>
+          {item.badge > 0 && <span className="menu-link-badge">{item.badge}</span>}
         </button>
       ))}
       <button className="mobile-menu-link danger" type="button" onClick={onLogout}>
@@ -862,14 +866,13 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
     };
   }, []);
   const counts = scopedAppointments.reduce((acc, item) => {
-    const key = item.status;
+    const key = item.status === 'waiting' ? 'scheduled' : item.status;
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
   const tiles = [
     { label: 'All', status: 'all', value: scopedAppointments.length },
     { label: 'Scheduled', status: 'scheduled', value: counts.scheduled || 0 },
-    { label: 'Waiting', status: 'waiting', value: counts.waiting || 0 },
     { label: 'Doctor Queue', status: 'doctor_queue', value: counts.doctor_queue || 0 },
     { label: 'Doctor Done', status: 'doctor_done', value: counts.doctor_done || 0 },
     { label: 'Closed', status: 'complete', value: counts.complete || 0 },
@@ -927,7 +930,7 @@ function AssistantFeesQueue() {
   const currentUser = getStoredUser();
   const [selectedDate, setSelectedDate] = useState(todayDate());
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
-  const [paymentFilter, setPaymentFilter] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState('all');
   const [refresh, setRefresh] = useState(0);
   const { data: doctorOptionData } = useApi(`/assistant-doctor-options?assistantEmail=${encodeURIComponent(currentUser?.email || '')}`);
   const doctorOptions = doctorOptionData?.doctors || [];
@@ -957,10 +960,12 @@ function AssistantFeesQueue() {
     <MobilePage title="Fees Collection" subtitle="Cash and UPI collection by mapped doctor." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       <DoctorRadioSelector doctors={doctorOptions} selectedDoctorId={effectiveDoctorId} onChange={setSelectedDoctorId} />
       <FeesDashboard data={data} active={paymentFilter} onChange={setPaymentFilter} />
-      <DoctorWiseFees rows={data?.doctorWise || []} />
-      {paymentFilter && <FeesWorkflowList loading={loading} error={error} cases={paidCases} mode="paid" />}
-      <QueueInsight title="Ready for Fees" value={data?.readyCases?.length || 0} helper="Doctor Done cases awaiting collection" />
-      <FeesWorkflowList loading={loading} error={error} cases={data?.readyCases || []} mode="ready" />
+      <MobileSection title={`Fees Pending (${data?.readyCases?.length || 0})`}>
+        <FeesWorkflowList loading={loading} error={error} cases={data?.readyCases || []} mode="ready" />
+      </MobileSection>
+      <MobileSection title={`Fees Collected (${paidCases.length})`}>
+        <FeesWorkflowList loading={loading} error={error} cases={paidCases} mode="paid" />
+      </MobileSection>
     </MobilePage>
   );
 }
@@ -1003,22 +1008,22 @@ function DoctorWiseFees({ rows }) {
 function FeesWorkflowList({ loading, error, cases, mode = 'ready' }) {
   if (loading) return <p className="muted">Loading fees queue...</p>;
   if (error) return <p className="error-text">Unable to load fees queue: {error.message}</p>;
-  if (!cases.length) return <p className="muted">{mode === 'paid' ? 'No paid patients for selected filter.' : 'No doctor-done cases ready for fees collection.'}</p>;
+  if (!cases.length) return <p className="muted">{mode === 'paid' ? 'No fees collected for selected filter.' : 'No pending fees collection cases.'}</p>;
 
   return (
     <div className="fees-workflow-list">
       {cases.map((item) => (
         <NavLink className="fees-queue-row" key={item.id} to={`/assistant/case/${item.id}`} state={{ from: 'fees' }}>
           <div className="appointment-number">{item.queueNumber}</div>
-          <time>{item.doctor?.nextVisitDate || 'Today'}</time>
           <div className="appointment-main">
             <strong className="appointment-name">{item.patient.name}</strong>
             <span>{item.patient.mobile} | {mode === 'paid' ? `${item.closure?.paymentMode} ${formatCurrency(item.closure?.feesCollected)}` : (item.doctor?.diagnosis || item.patient.chiefComplaint || 'Fees pending')}</span>
           </div>
           <div className="appointment-send-cell">
             <Status value={formatStatus(item.visitStatus || item.status)} />
+            <Status value={mode === 'ready' ? 'Fees Pending' : 'Fees Collected'} />
             <span className="send-appointment-button">
-              Fees
+              {mode === 'ready' ? 'Fees' : 'Paid'}
             </span>
           </div>
         </NavLink>
@@ -1260,6 +1265,7 @@ function AssistantCase() {
   const visitAlreadyComplete = item ? item.status === 'completed' || item.visitStatus === 'visit_complete' : false;
   const visitCancelled = item ? item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled') : false;
   const [paymentMode, setPaymentMode] = useState('Cash');
+  const [confirmFeesComplete, setConfirmFeesComplete] = useState(null);
 
   const updateBasic = async (event) => {
     event.preventDefault();
@@ -1276,6 +1282,10 @@ function AssistantCase() {
 
   const closeAssistantWork = async (event) => {
     event.preventDefault();
+    if (assistantCanMarkComplete) {
+      setConfirmFeesComplete({ alreadySaved: true });
+      return;
+    }
     if (!assistantCanCollectFees) {
       setMessage('Doctor has not completed analysis yet. Assistant can cancel the visit or wait for doctor completion.');
       return;
@@ -1292,24 +1302,18 @@ function AssistantCase() {
     }
     const payload = Object.fromEntries(formData);
     payload.receiptCapture = receiptFile?.name || '';
-    await apiPost(`/cases/${caseId}/assistant-close`, payload, 'PATCH');
-    setMessage('Fees saved. You can now mark this visit complete.');
-    broadcastClinicRefresh();
-    setRefresh((value) => value + 1);
+    setConfirmFeesComplete(payload);
   };
 
-  const markVisitComplete = async () => {
-    if (!assistantCanMarkComplete) {
-      setMessage('Collect fees first. For UPI, receipt screenshot capture is mandatory before completion.');
-      return;
-    }
-    if (visitAlreadyComplete) {
-      setMessage('Visit is already complete.');
-      return;
+  const saveFeesAndComplete = async () => {
+    if (!confirmFeesComplete) return;
+    if (!confirmFeesComplete.alreadySaved) {
+      await apiPost(`/cases/${caseId}/assistant-close`, confirmFeesComplete, 'PATCH');
     }
     await apiPost(`/cases/${caseId}/visit-complete`, { actor: 'Assistant' }, 'PATCH');
+    setConfirmFeesComplete(null);
     setMessage('');
-    setCompletionNotice('Visit marked complete successfully.');
+    setCompletionNotice('Fees saved and visit marked complete successfully.');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
     if (cameFromFees) {
@@ -1357,7 +1361,7 @@ function AssistantCase() {
           <button className="secondary-button" type="submit" disabled={assistantEditLocked}><Save size={17} />Update Details</button>
         </form>
       </MobileSection>
-      <CaseSummary item={item} />
+      <CaseSummary item={item} hideHistory />
       <DoctorOutputPanel item={item} />
       <button className="secondary-button print-button" type="button" onClick={() => printPrescription(item)}>
         <Printer size={17} />
@@ -1365,14 +1369,16 @@ function AssistantCase() {
       </button>
       <MobileSection title="Fees Collection">
         <form className="mobile-form" onSubmit={closeAssistantWork}>
-          <Input name="feesCollected" label="Fees collected" placeholder="1500" disabled={!assistantCanCollectFees || visitAlreadyComplete} />
-          <label className="field">
-            <span>Payment mode</span>
-            <select name="paymentMode" value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)} disabled={!assistantCanCollectFees || visitAlreadyComplete}>
-              <option value="Cash">Cash</option>
-              <option value="UPI">UPI</option>
-            </select>
-          </label>
+          <div className="inline-fields">
+            <Input name="feesCollected" label="Fees collected" placeholder="1500" disabled={!assistantCanCollectFees || visitAlreadyComplete} />
+            <label className="field">
+              <span>Payment mode</span>
+              <select name="paymentMode" value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)} disabled={!assistantCanCollectFees || visitAlreadyComplete}>
+                <option value="Cash">Cash</option>
+                <option value="UPI">UPI</option>
+              </select>
+            </label>
+          </div>
           {paymentMode === 'UPI' && (
             <label className="field wide receipt-capture-field">
               <span>UPI receipt screenshot capture<b className="required-star">*</b></span>
@@ -1381,28 +1387,35 @@ function AssistantCase() {
             </label>
           )}
           <Input name="assistantNotes" label="Assistant notes" disabled={!assistantCanCollectFees || visitAlreadyComplete} />
-          <button className="primary-button" type="submit" disabled={!assistantCanCollectFees || visitAlreadyComplete}><ReceiptIndianRupee size={17} />Save Fees Collection</button>
+          <div className="notice warning-notice fees-submit-warning">
+            Once submitted, the visit will be marked completed and cannot be edited by Assistant.
+          </div>
+          <button className="primary-button" type="submit" disabled={!(assistantCanCollectFees || assistantCanMarkComplete) || visitAlreadyComplete}>
+            <CheckCircle2 size={17} />Save and Mark Visit Complete
+          </button>
         </form>
       </MobileSection>
       {visitAlreadyComplete ? (
         <div className="notice">Visit is complete. No further assistant action is required.</div>
       ) : visitCancelled ? (
         <div className="notice warning-notice">Visit is cancelled.</div>
-      ) : assistantCanMarkComplete ? (
-        <button className="complete-visit-button" type="button" onClick={markVisitComplete} disabled={visitAlreadyComplete}>
-          <CheckCircle2 size={18} />
-          Mark Visit Complete
-        </button>
-      ) : assistantCanCollectFees ? (
-        <button className="complete-visit-button" type="button" onClick={markVisitComplete} disabled>
-          <CheckCircle2 size={18} />
-          Submit Fees First
-        </button>
-      ) : (
+      ) : !assistantCanCollectFees && !assistantCanMarkComplete && (
         <button className="cancel-visit-button" type="button" onClick={cancelVisit}>
           <Trash2 size={18} />
           Cancel Visit
         </button>
+      )}
+      {confirmFeesComplete && (
+        <div className="confirm-overlay fixed-confirm" role="dialog" aria-modal="true">
+          <div className="confirm-card">
+            <strong>Complete visit?</strong>
+            <p>Once submitted, this visit will be marked as completed and Assistant cannot edit it again.</p>
+            <div>
+              <button type="button" onClick={() => setConfirmFeesComplete(null)}>Cancel</button>
+              <button type="button" onClick={saveFeesAndComplete}>Confirm Submit</button>
+            </div>
+          </div>
+        </div>
       )}
     </MobilePage>
   );
@@ -1667,7 +1680,7 @@ function QueueCommandCenter({ compact }) {
   );
 }
 
-function AssistantBottomDock() {
+function AssistantBottomDock({ feesPendingCount = 0 }) {
   const navigate = useNavigate();
   const [message, setMessage] = useState('');
 
@@ -1698,6 +1711,7 @@ function AssistantBottomDock() {
       </button>
       <button type="button" onClick={() => navigate('/assistant/fees')}>
         <ReceiptIndianRupee size={18} />
+        {feesPendingCount > 0 && <span className="dock-tab-badge">{feesPendingCount}</span>}
         <span>Fees</span>
       </button>
       <button type="button" onClick={() => navigate('/assistant/dashboard')}>
@@ -1810,8 +1824,8 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
       navigate(role === 'doctor' ? `/doctor/case/${item.caseId}` : `/assistant/case/${item.caseId}`);
       return;
     }
-    const result = await apiPost(`/appointments/${item.id}/${action}`, { actor: role === 'doctor' ? 'Doctor' : 'Assistant' }, 'PATCH');
-    setMessage(`No. ${item.queueNumber} updated to ${formatStatus(result.appointment.status)}.`);
+    await apiPost(`/appointments/${item.id}/${action}`, { actor: role === 'doctor' ? 'Doctor' : 'Assistant' }, 'PATCH');
+    setMessage('');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
   };
@@ -1925,11 +1939,11 @@ function AppointmentRow({ item, index, role, dragIndex, setDragIndex, moveAppoin
           <strong className="appointment-name">{item.patientName}</strong>
         </div>
         <div className="appointment-line secondary-line">
-          <Status value={statusText} />
           <span>{item.type}</span>
         </div>
       </div>
       <div className="appointment-send-cell">
+        <Status value={statusText} />
         <AppointmentAction item={item} role={role} onAction={updateAppointment} />
       </div>
     </div>
@@ -1938,7 +1952,7 @@ function AppointmentRow({ item, index, role, dragIndex, setDragIndex, moveAppoin
 
 function AppointmentAction({ item, role, onAction }) {
   if (isClosedAppointment(item) || isCancelledAppointment(item)) {
-    return <span className="locked-action">{isCancelledAppointment(item) ? 'Cancelled' : 'Closed'}</span>;
+    return null;
   }
   if (role === 'doctor') {
     if (item.status === 'doctor_queue' || item.status === 'waiting') {
@@ -2012,6 +2026,7 @@ function AdminShell() {
     { to: '/admin/patients', label: 'Patients', icon: Users },
     { to: '/admin/approvals', label: 'Authorization', icon: UserCheck },
     { to: '/admin/hospitals', label: 'Hospitals', icon: Database },
+    { to: '/admin/doctor-assistant-mappings', label: 'Doctor Assistant Mapping', icon: Users },
     { to: '/admin/roles', label: 'Roles', icon: ShieldCheck },
     { to: '/admin/medicines', label: 'Medicines', icon: Pill },
     { to: '/admin/tests', label: 'X-rays & Tests', icon: FileSearch },
@@ -2168,16 +2183,33 @@ function AdminApprovals() {
 
 function AdminPatients() {
   const navigate = useNavigate();
+  const [query, setQuery] = useState('');
   const { data, loading, error } = useApi('/patients');
   const patients = data?.patients || [];
+  const normalizedQuery = query.trim().toLowerCase();
+  const visiblePatients = patients.filter((patient) => {
+    if (!normalizedQuery) return true;
+    return [
+      patient.name,
+      patient.mobile,
+      patient.id,
+      patient.address,
+      patient.city,
+      patient.chiefComplaint
+    ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+  });
   return (
     <Page title="Patients" eyebrow="Admin web module">
-      <Panel title={`Patient Records (${patients.length})`} icon={Users}>
+      <Panel title={`Patient Records (${visiblePatients.length}/${patients.length})`} icon={Users}>
+        <div className="admin-search-bar">
+          <Search size={17} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search patient by name, mobile number, code, address or complaint" />
+        </div>
         {loading && <p className="muted">Loading patient records...</p>}
         {error && <p className="error-text">Backend unavailable: {error.message}</p>}
-        {!loading && !patients.length && <p className="muted">No patient records found.</p>}
+        {!loading && !visiblePatients.length && <p className="muted">No patient records found.</p>}
         <div className="data-list">
-          {patients.map((patient) => (
+          {visiblePatients.map((patient) => (
             <button className="data-row patient-admin-row" type="button" key={patient.id} onClick={() => navigate(`/admin/patients/${patient.id}`)}>
               <strong>{patient.name}</strong>
               <span>{patient.mobile || '-'} | Age {patient.age || '-'} | {patient.gender || '-'} | {patient.address || patient.city || 'No address'}</span>
@@ -2221,6 +2253,106 @@ function AdminPatientDetails() {
           </Panel>
         </div>
       )}
+    </Page>
+  );
+}
+
+function DoctorAssistantMappingAdmin() {
+  const [query, setQuery] = useState('');
+  const [doctorId, setDoctorId] = useState('');
+  const [assistantId, setAssistantId] = useState('');
+  const [message, setMessage] = useState('');
+  const [refresh, setRefresh] = useState(0);
+  const { data, loading, error } = useApi('/doctor-assistant-mappings-master', refresh);
+  const doctors = data?.doctors || [];
+  const assistants = data?.assistants || [];
+  const mappings = data?.mappings || [];
+  const selectedDoctor = doctors.find((doctor) => doctor.id === doctorId);
+  const allowedAssistants = selectedDoctor
+    ? assistants.filter((assistant) => assistant.hospitalId === selectedDoctor.hospitalId)
+    : assistants;
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleMappings = mappings.filter((mapping) => {
+    if (!normalizedQuery) return true;
+    return [
+      mapping.doctorName,
+      mapping.doctorEmail,
+      mapping.hospitalName,
+      ...(mapping.assistants || []).flatMap((assistant) => [assistant.name, assistant.email])
+    ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+  });
+
+  useEffect(() => {
+    if (selectedDoctor && assistantId) {
+      const assistant = assistants.find((item) => item.id === assistantId);
+      if (assistant && assistant.hospitalId !== selectedDoctor.hospitalId) setAssistantId('');
+    }
+  }, [selectedDoctor?.id, assistantId, assistants]);
+
+  const saveMapping = async (event) => {
+    event.preventDefault();
+    setMessage('');
+    if (!doctorId || !assistantId) {
+      setMessage('Select Doctor and Assistant mapping.');
+      return;
+    }
+    const existing = mappings.find((mapping) => mapping.doctorId === doctorId);
+    const assistantIds = [...new Set([...(existing?.assistantIds || []), assistantId])];
+    try {
+      await apiPost('/doctor-assistant-mappings', { doctorId, assistantIds, actor: 'Admin' });
+      setMessage('Doctor Assistant mapping saved.');
+      setDoctorId('');
+      setAssistantId('');
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  return (
+    <Page title="Doctor Assistant Mapping" eyebrow="Admin master">
+      {message && <div className="notice">{message}</div>}
+      <Panel title="Add Mapping" icon={Users}>
+        <form className="admin-inline-form mapping-admin-form" onSubmit={saveMapping}>
+          <label className="field">
+            <span>Doctor<b className="required-star">*</b></span>
+            <select value={doctorId} onChange={(event) => setDoctorId(event.target.value)} required>
+              <option value="" disabled>Select doctor</option>
+              {doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>{doctor.name} - {doctor.hospitalName}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>Assistant<b className="required-star">*</b></span>
+            <select value={assistantId} onChange={(event) => setAssistantId(event.target.value)} required disabled={!doctorId}>
+              <option value="" disabled>{doctorId ? 'Select assistant' : 'Select doctor first'}</option>
+              {allowedAssistants.map((assistant) => <option key={assistant.id} value={assistant.id}>{assistant.name} - {assistant.hospitalName}</option>)}
+            </select>
+          </label>
+          <button className="primary-button" type="submit"><Save size={16} />Save Mapping</button>
+        </form>
+      </Panel>
+      <Panel title={`Mappings (${visibleMappings.length}/${mappings.length})`} icon={Users}>
+        <div className="admin-search-bar">
+          <Search size={17} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by doctor, assistant, email or hospital" />
+        </div>
+        {loading && <p className="muted">Loading mappings...</p>}
+        {error && <p className="error-text">Unable to load mappings: {error.message}</p>}
+        {!loading && !visibleMappings.length && <p className="muted">No mapping records found.</p>}
+        <div className="data-list">
+          {visibleMappings.map((mapping) => (
+            <div className="data-row mapping-admin-row" key={mapping.id}>
+              <strong>{mapping.doctorName}</strong>
+              <span>{mapping.doctorEmail} | {mapping.hospitalName}</span>
+              <small>
+                Assistants: {mapping.assistants?.length
+                  ? mapping.assistants.map((assistant) => `${assistant.name} (${assistant.email})`).join(', ')
+                  : 'No assistants mapped'}
+              </small>
+            </div>
+          ))}
+        </div>
+      </Panel>
     </Page>
   );
 }
@@ -2345,6 +2477,114 @@ function TestMasterAdmin() {
   );
 }
 
+function MedicineMasterAdmin() {
+  const [refresh, setRefresh] = useState(0);
+  const [query, setQuery] = useState('');
+  const [message, setMessage] = useState('');
+  const { data, loading, error } = useApi('/medicines', refresh);
+  const medicines = data?.medicines || [];
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleMedicines = medicines.filter((medicine) => {
+    if (!normalizedQuery) return true;
+    return [medicine.name, medicine.generic, medicine.description, medicine.id]
+      .some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+  });
+
+  const addMedicine = async (event) => {
+    event.preventDefault();
+    setMessage('');
+    const payload = Object.fromEntries(new FormData(event.currentTarget));
+    try {
+      await apiPost('/medicines', payload);
+      event.currentTarget.reset();
+      setMessage('Medicine added.');
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const uploadMedicines = async (event) => {
+    event.preventDefault();
+    setMessage('');
+    const formData = new FormData(event.currentTarget);
+    if (!formData.get('file')?.name) {
+      setMessage('Select an Excel file to upload.');
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl('/medicines/bulk-upload'), {
+        method: 'POST',
+        body: formData
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Bulk upload failed');
+      event.currentTarget.reset();
+      setMessage(`Bulk upload complete. ${payload.created} created, ${payload.updated} updated.`);
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setMessage(error.message);
+    }
+  };
+
+  const deleteMedicine = async (id) => {
+    await fetch(apiUrl(`/medicines/${id}`), { method: 'DELETE' });
+    setRefresh((value) => value + 1);
+  };
+
+  return (
+    <Page title="Medicine Master" eyebrow="Admin web module">
+      {message && <div className="notice">{message}</div>}
+      <Panel title="Bulk Excel Actions" icon={Pill}>
+        <div className="bulk-action-row">
+          <a className="secondary-button compact-action" href={apiUrl('/medicines/template.xlsx')} download>
+            <FileText size={16} />Download Sample Template
+          </a>
+          <a className="secondary-button compact-action" href={apiUrl('/medicines/export.xlsx')} download>
+            <FileText size={16} />Download All Medicines
+          </a>
+        </div>
+        <form className="admin-inline-form bulk-upload-form" onSubmit={uploadMedicines}>
+          <label className="field wide">
+            <span>Upload Excel medicine template</span>
+            <input name="file" type="file" accept=".xlsx,.xls" />
+          </label>
+          <button className="primary-button" type="submit"><Upload size={16} />Upload Medicines</button>
+        </form>
+      </Panel>
+      <Panel title="Add Medicine" icon={Pill}>
+        <form className="admin-inline-form" onSubmit={addMedicine}>
+          <Input name="name" label="Medicine name" required />
+          <Input name="generic" label="Generic" />
+          <Input name="description" label="Description / dosage" wide />
+          <button className="primary-button" type="submit"><Plus size={16} />Add</button>
+        </form>
+      </Panel>
+      <Panel title={`Medicine Records (${visibleMedicines.length}/${medicines.length})`} icon={Pill}>
+        <div className="admin-search-bar">
+          <Search size={17} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search medicine by name, generic, dosage or code" />
+        </div>
+        {loading && <p className="muted">Loading medicines...</p>}
+        {error && <p className="error-text">Unable to load medicines: {error.message}</p>}
+        {!loading && !visibleMedicines.length && <p className="muted">No medicines found.</p>}
+        <div className="data-list">
+          {visibleMedicines.map((medicine) => (
+            <div className="data-row admin-master-row medicine-admin-row" key={medicine.id}>
+              <div>
+                <strong>{medicine.name}</strong>
+                <span>{medicine.generic || 'No generic'} | {medicine.description || 'No dosage details'}</span>
+                <small>Code: {medicine.id}</small>
+              </div>
+              <button type="button" onClick={() => deleteMedicine(medicine.id)}><Trash2 size={15} />Delete</button>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </Page>
+  );
+}
+
 function TestSelector({ selectedTests, setSelectedTests }) {
   const { data } = useApi('/tests');
   const addTest = (event) => {
@@ -2387,9 +2627,19 @@ function MedicineSelector({ prescriptionItems, setPrescriptionItems }) {
 
   const addMedicine = (medicine) => {
     if (!prescriptionItems.some((item) => item.id === medicine.id)) {
-      setPrescriptionItems([...prescriptionItems, medicine]);
+      setPrescriptionItems([...prescriptionItems, {
+        ...medicine,
+        dosePattern: medicine.dosePattern || '1 - 1 - 1',
+        doseSuggestion: medicine.doseSuggestion || medicine.description || ''
+      }]);
     }
     setQuery('');
+  };
+
+  const updateMedicineDose = (id, updates) => {
+    setPrescriptionItems(prescriptionItems.map((item) => (
+      item.id === id ? { ...item, ...updates } : item
+    )));
   };
 
   return (
@@ -2409,20 +2659,41 @@ function MedicineSelector({ prescriptionItems, setPrescriptionItems }) {
           ))}
         </div>
       )}
-      <SelectionBox items={prescriptionItems} onRemove={(id) => setPrescriptionItems(prescriptionItems.filter((item) => item.id !== id))} empty="Selected medicines will build prescription below." />
+      <SelectionBox
+        items={prescriptionItems}
+        onRemove={(id) => setPrescriptionItems(prescriptionItems.filter((item) => item.id !== id))}
+        onDoseChange={updateMedicineDose}
+        empty="Selected medicines will build prescription below."
+      />
     </div>
   );
 }
 
-function SelectionBox({ items, onRemove, empty }) {
+function SelectionBox({ items, onRemove, onDoseChange, empty }) {
   return (
     <div className="selection-box">
       {!items.length && <p>{empty}</p>}
       {items.map((item) => (
-        <span key={item.id}>
-          {item.name}
-          <button type="button" onClick={() => onRemove(item.id)}>x</button>
-        </span>
+        <div className="selected-medicine-dose" key={item.id}>
+          <div>
+            <strong>{item.name}</strong>
+            <button type="button" onClick={() => onRemove(item.id)}>x</button>
+          </div>
+          {onDoseChange && (
+            <div className="dose-controls">
+              <label>
+                <span>Dose time</span>
+                <select value={item.dosePattern || '1 - 1 - 1'} onChange={(event) => onDoseChange(item.id, { dosePattern: event.target.value })}>
+                  {DOSE_PATTERNS.map((pattern) => <option key={pattern} value={pattern}>{pattern}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Suggestion</span>
+                <input value={item.doseSuggestion || ''} onChange={(event) => onDoseChange(item.id, { doseSuggestion: event.target.value })} placeholder="After food, 5 days" maxLength={120} />
+              </label>
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );
@@ -2434,7 +2705,7 @@ function PrescriptionPreview({ item, selectedTests, prescriptionItems }) {
       <strong>Prescription Preview</strong>
       <p>{item.patient.name} - {item.patient.mobile}</p>
       <ul>
-        {prescriptionItems.map((medicine) => <li key={medicine.id}>{medicine.name}: {medicine.description}</li>)}
+        {prescriptionItems.map((medicine) => <li key={medicine.id}>{formatMedicineDoseLine(medicine)}</li>)}
       </ul>
       {!!selectedTests.length && <p><b>Suggested X-rays/tests:</b> {selectedTests.map((test) => test.name).join(', ')}</p>}
     </div>
@@ -2444,7 +2715,7 @@ function PrescriptionPreview({ item, selectedTests, prescriptionItems }) {
 function printPrescription(item) {
   const tests = item.doctor?.testsRequested || [];
   const medicines = item.doctor?.prescriptionItems?.length
-    ? item.doctor.prescriptionItems.map((medicine) => `<li>${medicine.name}: ${medicine.description || ''}</li>`).join('')
+    ? item.doctor.prescriptionItems.map((medicine) => `<li>${formatMedicineDoseLine(medicine)}</li>`).join('')
     : `<li>${item.doctor?.prescription || 'Prescription not yet added'}</li>`;
   const testText = tests.length ? tests.join(', ') : 'No X-ray/test suggested';
   const html = `
@@ -2611,7 +2882,7 @@ function QueueInsight({ title, value, helper }) {
   );
 }
 
-function CaseSummary({ item, compact }) {
+function CaseSummary({ item, compact, hideHistory = false }) {
   return (
     <div className="summary-card">
       <h3>Case Summary</h3>
@@ -2623,7 +2894,7 @@ function CaseSummary({ item, compact }) {
         {!compact && <div><dt>Tests</dt><dd>{item.doctor?.testsRequested?.join(', ') || 'Not requested'}</dd></div>}
         {!compact && <div><dt>Next visit</dt><dd>{item.doctor?.nextVisitDate || '-'}</dd></div>}
       </dl>
-      {!compact && <PatientHistoryDays historyDays={item.patient?.historyDays || groupTimelineByDate(item.patient?.timeline || [])} />}
+      {!compact && !hideHistory && <PatientHistoryDays historyDays={item.patient?.historyDays || groupTimelineByDate(item.patient?.timeline || [])} />}
     </div>
   );
 }
@@ -2923,6 +3194,7 @@ function isOpenAppointment(item) {
 function appointmentStatusLabel(item) {
   if (isCancelledAppointment(item)) return 'Cancelled';
   if (isClosedAppointment(item)) return 'Closed';
+  if (['waiting', 'scheduled'].includes(item?.status)) return 'Scheduled';
   return formatStatus(item.status);
 }
 
@@ -2931,7 +3203,7 @@ function caseStatusLabel(item) {
   if (item.status === 'completed' || item.visitStatus === 'visit_complete') return 'Closed';
   if (item.status === 'doctor_queue') return 'Open - Doctor Queue';
   if (item.status === 'assistant_closure') return 'Open - Fees Queue';
-  if (item.status === 'assistant_intake') return 'Open - Waiting';
+  if (item.status === 'assistant_intake') return 'Open - Scheduled';
   return formatStatus(item.status);
 }
 
@@ -2955,12 +3227,18 @@ function splitList(value = '') {
 
 function formatList(items = []) {
   if (!Array.isArray(items)) return '';
-  return items.map((item) => (typeof item === 'string' ? item : item.name)).filter(Boolean).join(', ');
+  return items.map((item) => (typeof item === 'string' ? item : formatMedicineDoseLine(item))).filter(Boolean).join(', ');
 }
 
 function formatPrescriptionLine(doctor = {}) {
   if (doctor.prescription) return doctor.prescription;
   return formatList(doctor.prescriptionItems);
+}
+
+function formatMedicineDoseLine(medicine = {}) {
+  const dose = medicine.dosePattern ? ` [${medicine.dosePattern}]` : '';
+  const suggestion = medicine.doseSuggestion || medicine.description || medicine.generic || '';
+  return `${medicine.name || 'Medicine'}${dose}${suggestion ? `: ${suggestion}` : ''}`;
 }
 
 function formatDateTime(value) {
@@ -3065,6 +3343,7 @@ function saveDraft(payload) {
 }
 
 function formatStatus(status) {
+  if (status === 'doctor_queue') return "Doctor's Queue";
   return String(status || '').split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 }
 

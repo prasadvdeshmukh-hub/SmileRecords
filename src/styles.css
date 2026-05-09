@@ -25,6 +25,7 @@
 }
 
 body {
+  font-size: 15px;
   margin: 0;
   min-width: 320px;
   text-rendering: optimizeLegibility;
@@ -597,6 +598,7 @@ td span {
   border: 0;
   cursor: pointer;
   display: block;
+  height: 74px;
   padding: 0;
   text-align: left;
 }
@@ -615,10 +617,11 @@ td span {
 
 .mobile-header-logo {
   display: block;
-  height: 74px;
-  max-width: min(220px, calc(100vw - 205px));
+  height: 82px;
+  max-width: min(245px, calc(100vw - 185px));
   object-fit: contain;
   object-position: left center;
+  transform: translateY(-4px);
   width: 100%;
 }
 
@@ -639,7 +642,7 @@ td span {
 
 .notification-count {
   align-items: center;
-  background: var(--primary);
+  background: #dc2626;
   border: 2px solid #ffffff;
   border-radius: 999px;
   color: #ffffff;
@@ -688,7 +691,28 @@ td span {
   gap: 9px;
   min-height: 38px;
   padding: 8px 10px;
+  position: relative;
   text-align: left;
+}
+
+.menu-link-badge,
+.dock-tab-badge {
+  align-items: center;
+  background: #f59e0b;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 900;
+  height: 18px;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 4px;
+}
+
+.menu-link-badge {
+  margin-left: auto;
 }
 
 .mobile-menu-link:hover {
@@ -963,6 +987,57 @@ td span {
   font-size: 12px;
 }
 
+.admin-search-bar {
+  align-items: center;
+  background: #f8fbff;
+  border: 1px solid #dce8f2;
+  border-radius: var(--radius);
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+}
+
+.admin-search-bar input {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  outline: 0;
+  width: 100%;
+}
+
+.mapping-admin-form {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.mapping-admin-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.bulk-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.bulk-upload-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.medicine-admin-row {
+  align-items: center;
+}
+
+.medicine-admin-row small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
 .admin-detail-grid {
   display: grid;
   gap: 10px;
@@ -1179,6 +1254,53 @@ td span {
   gap: 6px;
   min-height: 42px;
   padding: 7px;
+}
+
+.selected-medicine-dose {
+  background: #ffffff;
+  border: 1px solid #dce8f2;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  width: 100%;
+}
+
+.selected-medicine-dose > div:first-child {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.selected-medicine-dose strong {
+  font-size: 14px;
+}
+
+.dose-controls {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(98px, .6fr) minmax(0, 1fr);
+}
+
+.dose-controls label {
+  display: grid;
+  gap: 3px;
+}
+
+.dose-controls span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.dose-controls select,
+.dose-controls input {
+  border: 1px solid #cfd9e2;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 13px;
+  min-height: 34px;
+  padding: 5px 8px;
 }
 
 .mapping-list {
@@ -2021,7 +2143,7 @@ button.date-selector {
   cursor: grab;
   display: grid;
   gap: 7px;
-  grid-template-columns: 38px 44px minmax(0, 1fr) 70px;
+  grid-template-columns: 38px 44px minmax(0, 1fr) minmax(128px, auto);
   min-height: 44px;
   padding: 6px 7px;
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
@@ -2158,15 +2280,18 @@ button.date-selector {
 }
 
 .appointment-send-cell {
-  align-items: end;
-  display: grid;
-  gap: 4px;
-  justify-items: end;
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 128px;
 }
 
 .appointment-send-cell .status {
+  font-size: 10px;
   line-height: 1.05;
-  max-width: 68px;
+  max-width: 78px;
+  padding: 4px 7px;
   text-align: center;
   white-space: normal;
 }
@@ -2178,13 +2303,7 @@ button.date-selector {
 
 .secondary-line {
   gap: 8px;
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.secondary-line .status {
-  font-size: 10px;
-  padding: 4px 7px;
-  white-space: nowrap;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .locked-action {
@@ -2477,6 +2596,13 @@ button.date-selector {
   gap: 2px;
   justify-items: center;
   min-height: 52px;
+  position: relative;
+}
+
+.dock-tab-badge {
+  position: absolute;
+  right: 18px;
+  top: 5px;
 }
 
 .assistant-bottom-dock button:last-child {
@@ -2619,16 +2745,14 @@ button.date-selector {
   color: inherit;
   display: grid;
   gap: 7px;
-  grid-template-columns: 38px 54px minmax(0, 1fr) 70px;
+  grid-template-columns: 38px minmax(0, 1fr) minmax(116px, auto);
   min-height: 50px;
   padding: 7px;
   text-decoration: none;
 }
 
-.fees-queue-row time {
-  color: var(--primary-strong);
-  font-size: 11px;
-  font-weight: 900;
+.fees-queue-row .appointment-send-cell {
+  min-width: 116px;
 }
 
 .fees-case-card {
@@ -3155,6 +3279,11 @@ button.date-selector {
   justify-content: center;
 }
 
+.sticky-actions .primary-button[type="submit"] {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
 .notice {
   border-color: #bdeee3;
   color: #0b6b5a;
@@ -3461,7 +3590,12 @@ td span {
 
 .status.cancelled {
   background: #fff1f0;
-  color: var(--danger);
+  color: #b42318;
+}
+
+.appointment-send-cell .status.cancelled {
+  border: 1px solid #ffccc7;
+  font-weight: 900;
 }
 
 .status.success {
@@ -3540,6 +3674,79 @@ td span {
   min-height: 42px;
   overflow-y: auto;
   resize: vertical;
+}
+
+/* Typography consistency pass: increases text clarity without changing control or panel dimensions. */
+.mobile-title h2 {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.14;
+}
+
+.mobile-section h3,
+.summary-card h3,
+.panel header h3,
+.sheet-header strong,
+.doctor-select-panel > strong {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.mobile-title p,
+.queue-insight p,
+.hero-card p,
+.muted,
+.notice {
+  font-size: 13px;
+}
+
+.field span,
+.check span,
+.new-patient-sheet .field span,
+.assistant-basic-compact .field span,
+.quick-intake .field span,
+.doctor-select-panel .field span {
+  font-size: 13px;
+}
+
+.field input,
+.field select,
+.field textarea,
+.new-patient-sheet .field input,
+.new-patient-sheet .field select,
+.assistant-basic-compact .field input,
+.assistant-basic-compact .field select,
+.quick-intake .field input,
+.quick-intake .field select,
+.doctor-select-panel .field select {
+  font-size: 14px;
+}
+
+.appointment-name,
+.case-card strong,
+.data-row strong,
+.approval-card strong,
+.mapping-row strong {
+  font-size: 14px;
+}
+
+.status,
+.appointment-send-cell .status {
+  font-size: 11px;
+}
+
+.date-selector strong,
+.doctor-radio-panel > strong,
+.today-dashboard header strong,
+.queue-insight span {
+  font-size: 13px;
+}
+
+.date-selector small,
+.today-status-tile span,
+.appointment-row span,
+.appointment-row small {
+  font-size: 12px;
 }
 
 .textarea-field {
@@ -3850,7 +4057,7 @@ td span {
   }
 
   .appointment-row {
-    grid-template-columns: 32px 39px minmax(0, 1fr) 70px;
+    grid-template-columns: 32px 39px minmax(0, 1fr) minmax(118px, auto);
     gap: 5px;
     padding: 6px;
   }
