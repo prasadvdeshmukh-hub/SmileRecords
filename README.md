@@ -46,6 +46,8 @@ For Render/Replit, add either this single environment variable:
 FIREBASE_SERVICE_ACCOUNT_BASE64=<base64 encoded service-account-json>
 ```
 
+For local testing, put the same values in a `.env` file at the project root. `.env` is ignored by git.
+
 Or add these three variables:
 
 ```text
