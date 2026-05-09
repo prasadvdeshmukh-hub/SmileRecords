@@ -2670,15 +2670,26 @@ function DatePickerControl({ value, onChange }) {
   const date = new Date(`${value}T00:00:00`);
   const label = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   const dayLabel = date.toLocaleDateString('en-IN', { weekday: 'short' });
+  const inputRef = useRef(null);
+  const openPicker = () => {
+    const input = inputRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
   return (
-    <label className="date-selector inline-date-picker" aria-label="Select appointment date">
+    <button className="date-selector inline-date-picker" type="button" aria-label="Select appointment date" onClick={openPicker}>
       <span>
         <strong>{isToday(value) ? 'Today' : dayLabel}</strong>
         <small>{label}</small>
       </span>
       <CalendarDays size={17} />
-      <input type="date" value={value} onChange={(event) => onChange(event.target.value)} />
-    </label>
+      <input ref={inputRef} type="date" value={value} onChange={(event) => onChange(event.target.value)} onClick={(event) => event.stopPropagation()} />
+    </button>
   );
 }
 

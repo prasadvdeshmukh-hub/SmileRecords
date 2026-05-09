@@ -1935,6 +1935,10 @@ td span {
   position: relative;
 }
 
+button.date-selector {
+  font: inherit;
+}
+
 .date-selector span {
   display: grid;
   line-height: 1.05;
