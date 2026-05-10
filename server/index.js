@@ -79,6 +79,44 @@ app.get('/api/dashboard', (req, res) => {
   });
 });
 
+app.get('/api/doctor-dashboard', (req, res) => {
+  const from = normalizeDate(req.query.from) || today();
+  const to = normalizeDate(req.query.to) || from;
+  const range = validateDateRange(from, to);
+  if (range.error) return res.status(400).json({ error: range.error });
+
+  const doctor = findDoctor(req.query.doctorId, req.query.doctorEmail);
+  if (req.query.doctorEmail && !doctor) return res.status(404).json({ error: 'Doctor not found' });
+
+  const scopedCases = doctor ? db.cases.filter((item) => isCaseVisibleToDoctor(item, doctor)) : db.cases;
+  const activeCases = scopedCases.filter((item) => isInDateRange(caseActivityDate(item), from, to));
+  const servedCases = scopedCases.filter((item) => (
+    isCompletedCase(item) && isInDateRange(caseCompletionDate(item), from, to)
+  ));
+  const openCases = activeCases.filter((item) => !isCompletedCase(item) && !isCancelledCase(item));
+  const cancelledCases = scopedCases.filter((item) => (
+    isCancelledCase(item) && isInDateRange(caseActivityDate(item), from, to)
+  ));
+  const paidCases = scopedCases.filter((item) => (
+    item.closure?.closedAt
+    && item.closure?.feesCollected
+    && isInDateRange(item.closure.closedAt.slice(0, 10), from, to)
+  ));
+
+  res.json({
+    from,
+    to,
+    maxDays: 366,
+    metrics: {
+      patientServed: servedCases.length,
+      openCases: openCases.length,
+      cancelledCases: cancelledCases.length,
+      amountCollected: buildFeesSummary(paidCases)
+    },
+    daily: buildDoctorDashboardDays(scopedCases, from, to)
+  });
+});
+
 app.get('/api/cases', (req, res) => {
   let cases = db.cases;
   if (req.query.queue === 'doctor') cases = cases.filter((item) => item.status === 'doctor_queue' && item.visitStatus !== 'cancelled');
@@ -718,8 +756,9 @@ app.get('/api/fees-summary', (req, res) => {
   const date = String(req.query.date || today()).slice(0, 10);
   const doctorId = String(req.query.doctorId || '').trim();
   const assistant = findAssistant('', req.query.assistantEmail);
+  const doctor = findDoctor(req.query.doctorId, req.query.doctorEmail);
   const mappedDoctorIds = assistant ? getMappedDoctorIdsForAssistant(assistant) : [];
-  const allowedDoctorIds = doctorId ? [doctorId] : mappedDoctorIds;
+  const allowedDoctorIds = doctor ? [doctor.id] : (doctorId ? [doctorId] : mappedDoctorIds);
   const paidCases = db.cases.filter((item) => (
     item.closure?.closedAt
     && item.closure?.feesCollected
@@ -820,8 +859,59 @@ app.get('/api/notifications', (req, res) => {
   res.json({ notifications });
 });
 
+app.patch('/api/notifications/read-all', (req, res) => {
+  const email = normalizeEmail(req.body.email || req.headers['x-user-email']);
+  const user = db.users.find((item) => normalizeEmail(item.email) === email);
+  let updated = 0;
+  for (const item of db.notifications || []) {
+    const matches = item.userId === user?.id || normalizeEmail(item.email) === email || (!item.userId && !item.email);
+    if (matches && item.status !== 'Read') {
+      item.status = 'Read';
+      item.readAt = new Date().toISOString();
+      updated += 1;
+    }
+  }
+  res.json({ updated });
+});
+
+app.patch('/api/notifications/:id/read', (req, res) => {
+  const item = (db.notifications || []).find((notification) => notification.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'Notification not found' });
+  item.status = 'Read';
+  item.readAt = item.readAt || new Date().toISOString();
+  res.json({ notification: item });
+});
+
 app.get('/api/users', (req, res) => {
   res.json({ users: db.users.map((user) => withHospital(user)) });
+});
+
+app.get('/api/users/me', (req, res) => {
+  const user = findUserByEmail(req.query.email || req.headers['x-user-email']);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ user: withHospital(user) });
+});
+
+app.patch('/api/users/profile-photo', (req, res) => {
+  const user = findUserByEmail(req.body.email || req.headers['x-user-email']);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.status !== 'Active') return res.status(403).json({ error: 'Only active users can update profile photo' });
+  const action = req.body.action === 'delete' ? 'delete' : 'save';
+  if (action === 'delete') {
+    user.profilePhoto = '';
+    log('USER_DELETE_PROFILE_PHOTO', user.name, user.id, { req, module: 'Profile', actorRole: user.role, entityType: 'User', entityId: user.id });
+    return res.json({ user: withHospital(user) });
+  }
+  const profilePhoto = String(req.body.profilePhoto || '');
+  if (!/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(profilePhoto)) {
+    return res.status(400).json({ error: 'Upload a PNG, JPG, or WEBP profile photo' });
+  }
+  if (profilePhoto.length > 850000) {
+    return res.status(400).json({ error: 'Profile photo is too large. Please use an image below 600 KB.' });
+  }
+  user.profilePhoto = profilePhoto;
+  log('USER_UPDATE_PROFILE_PHOTO', user.name, user.id, { req, module: 'Profile', actorRole: user.role, entityType: 'User', entityId: user.id });
+  res.json({ user: withHospital(user) });
 });
 
 app.get('/api/hospitals', (req, res) => {
@@ -1327,6 +1417,38 @@ function countCases(status) {
   return db.cases.filter((item) => item.status === status).length;
 }
 
+function normalizeDate(value) {
+  const text = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(`${text}T00:00:00.000Z`)) ? text : '';
+}
+
+function validateDateRange(from, to) {
+  const fromTime = Date.parse(`${from}T00:00:00.000Z`);
+  const toTime = Date.parse(`${to}T00:00:00.000Z`);
+  if (!Number.isFinite(fromTime) || !Number.isFinite(toTime)) return { error: 'Select a valid date range.' };
+  if (fromTime > toTime) return { error: 'From date cannot be after To date.' };
+  const days = Math.floor((toTime - fromTime) / 86400000) + 1;
+  if (days > 366) return { error: 'Date range cannot be more than 366 days.' };
+  return { days };
+}
+
+function isInDateRange(value, from, to) {
+  const date = normalizeDate(value);
+  return Boolean(date && date >= from && date <= to);
+}
+
+function isCompletedCase(item) {
+  return item.status === 'completed' || item.visitStatus === 'visit_complete';
+}
+
+function isCancelledCase(item) {
+  return item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled');
+}
+
+function caseCompletionDate(item) {
+  return (item.completedAt || item.closure?.closedAt || item.updatedAt || item.doctor?.submittedAt || item.createdAt || today()).slice(0, 10);
+}
+
 function caseActivityDate(item) {
   return (item.closure?.closedAt || item.doctor?.submittedAt || item.updatedAt || item.createdAt || today()).slice(0, 10);
 }
@@ -1375,6 +1497,30 @@ function buildDoctorFeeSummary(cases) {
     }
   }
   return [...grouped.values()];
+}
+
+function buildDoctorDashboardDays(cases, from, to) {
+  const days = [];
+  const fromTime = Date.parse(`${from}T00:00:00.000Z`);
+  const toTime = Date.parse(`${to}T00:00:00.000Z`);
+  for (let time = fromTime; time <= toTime; time += 86400000) {
+    const date = new Date(time).toISOString().slice(0, 10);
+    const activeCases = cases.filter((item) => caseActivityDate(item) === date);
+    const servedCases = cases.filter((item) => isCompletedCase(item) && caseCompletionDate(item) === date);
+    const cancelledCases = cases.filter((item) => isCancelledCase(item) && caseActivityDate(item) === date);
+    const paidCases = cases.filter((item) => item.closure?.closedAt?.slice(0, 10) === date && item.closure?.feesCollected);
+    const fees = buildFeesSummary(paidCases);
+    days.push({
+      date,
+      patientServed: servedCases.length,
+      openCases: activeCases.filter((item) => !isCompletedCase(item) && !isCancelledCase(item)).length,
+      cancelledCases: cancelledCases.length,
+      cashAmount: fees.cashAmount,
+      upiAmount: fees.upiAmount,
+      totalAmount: fees.totalAmount
+    });
+  }
+  return days.reverse();
 }
 
 function getMappedDoctorIdsForAssistant(assistant) {
@@ -1758,7 +1904,8 @@ function requireActiveSubscriptionForAppApi(req, res, next) {
     '/api/auth',
     '/api/access-requests',
     '/api/hospitals',
-    '/api/subscriptions'
+    '/api/subscriptions',
+    '/api/users/me'
   ];
   if (!req.path.startsWith('/api') || publicPrefixes.some((prefix) => req.path.startsWith(prefix))) return next();
   const email = normalizeEmail(req.headers['x-user-email']);
@@ -1803,7 +1950,8 @@ function createUser(input) {
     requestedRole: input.requestedRole || '',
     hospitalId: input.hospitalId || '',
     status: input.status || 'Pending',
-    description: input.description || ''
+    description: input.description || '',
+    profilePhoto: input.profilePhoto || ''
   };
 }
 
@@ -2003,6 +2151,7 @@ function withHospital(user) {
   return {
     ...user,
     hospitalName: hospital?.name || '',
+    profilePhoto: user.profilePhoto || '',
     subscription: user.subscription ? subscriptionStatus(user) : user.subscription
   };
 }

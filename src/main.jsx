@@ -6,6 +6,7 @@ import {
   Bell,
   CalendarDays,
   CalendarCheck,
+  Camera,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
@@ -38,7 +39,8 @@ import {
   UserRound,
   Users,
   UserRoundPlus,
-  WifiOff
+  WifiOff,
+  X
 } from 'lucide-react';
 import './styles.css';
 
@@ -83,12 +85,65 @@ function displayUserName(user, fallback = 'User') {
   return emailName || fallback;
 }
 
+function userInitials(user) {
+  return displayUserName(user, 'User')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'U';
+}
+
 function getStoredUser() {
   try {
     return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
   } catch {
     return null;
   }
+}
+
+function storeCurrentUser(user) {
+  if (!user) return;
+  localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+  window.dispatchEvent(new Event('smile-records-user-change'));
+}
+
+function useSyncedCurrentUser() {
+  const [user, setUser] = useState(getStoredUser());
+
+  useEffect(() => {
+    let active = true;
+    const syncFromStorage = () => setUser(getStoredUser());
+    const refreshFromServer = async () => {
+      const stored = getStoredUser();
+      if (!stored?.email) {
+        if (active) setUser(stored);
+        return;
+      }
+      try {
+        const response = await fetch(apiUrl(`/users/me?email=${encodeURIComponent(stored.email)}`), { headers: apiHeaders() });
+        if (!response.ok) throw new Error(`API ${response.status}`);
+        const payload = await response.json();
+        if (active && payload.user) {
+          localStorage.setItem(SESSION_KEY, JSON.stringify(payload.user));
+          setUser(payload.user);
+        }
+      } catch {
+        if (active) setUser(stored);
+      }
+    };
+
+    window.addEventListener('smile-records-user-change', syncFromStorage);
+    window.addEventListener('smile-records-refresh', refreshFromServer);
+    refreshFromServer();
+    return () => {
+      active = false;
+      window.removeEventListener('smile-records-user-change', syncFromStorage);
+      window.removeEventListener('smile-records-refresh', refreshFromServer);
+    };
+  }, []);
+
+  return [user, setUser];
 }
 
 function roleHome(role = '') {
@@ -165,6 +220,12 @@ async function apiPost(path, body, method = 'POST') {
     throw error;
   }
   const data = await response.json();
+  if (data?.user) {
+    const stored = getStoredUser();
+    if (stored?.email && data.user.email && stored.email.toLowerCase() === data.user.email.toLowerCase()) {
+      storeCurrentUser(data.user);
+    }
+  }
   if (typeof window !== 'undefined') {
     window.setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 0);
   }
@@ -216,6 +277,7 @@ function App() {
         <Route path="/doctor" element={<RequireAuth allowedRoles={['Doctor']}><MobileShell role="doctor" /></RequireAuth>}>
           <Route index element={<Navigate to="/doctor/queue" replace />} />
           <Route path="queue" element={<DoctorQueue />} />
+          <Route path="fees" element={<DoctorFeesQueue />} />
           <Route path="assistants" element={<DoctorAssistantMapping />} />
           <Route path="reconciliation" element={<DoctorFeesReconciliation />} />
           <Route path="dashboard" element={<MobileAnalytics role="doctor" />} />
@@ -282,7 +344,7 @@ function Login() {
     }
     try {
       const result = await apiPost('/auth/login', { email: loginEmail, provider: 'Google' });
-      localStorage.setItem(SESSION_KEY, JSON.stringify(result.user));
+      storeCurrentUser(result.user);
       navigate(isSubscriptionUsable(result.user) ? roleHome(result.user.role) : '/subscription');
     } catch (error) {
       setMessage(error.message);
@@ -411,7 +473,7 @@ function SubscriptionGate() {
 
   useEffect(() => {
     if (data?.user) {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(data.user));
+      storeCurrentUser(data.user);
       setUser(data.user);
     }
   }, [data?.user?.subscription?.status, data?.user?.subscription?.paidUntil]);
@@ -438,7 +500,7 @@ function SubscriptionGate() {
         theme: { color: '#0f6cbd' },
         handler: async (response) => {
           const verified = await apiPost('/subscriptions/verify', { ...response, email: user.email });
-          localStorage.setItem(SESSION_KEY, JSON.stringify(verified.user));
+          storeCurrentUser(verified.user);
           setUser(verified.user);
           setMessage('Subscription payment verified. Access is active.');
           navigate(roleHome(verified.user.role));
@@ -494,21 +556,25 @@ function SubscriptionGate() {
 
 function MobileShell({ role }) {
   const isDoctor = role === 'doctor';
-  const currentUser = getStoredUser();
+  const [currentUser] = useSyncedCurrentUser();
   const queuePath = isDoctor
-    ? '/cases?queue=doctor'
+    ? `/fees-summary?doctorEmail=${encodeURIComponent(currentUser?.email || '')}`
     : `/fees-summary?assistantEmail=${encodeURIComponent(currentUser?.email || '')}`;
   const [refresh, setRefresh] = useState(0);
   const { data } = useApi(queuePath, refresh);
   const { data: notificationData } = useApi(`/notifications?email=${encodeURIComponent(currentUser?.email || '')}`, refresh);
-  const feesPendingCount = isDoctor ? 0 : (data?.readyCases?.length ?? 0);
-  const activeQueueCount = isDoctor ? (data?.cases?.length ?? 0) : feesPendingCount;
-  const queueCount = activeQueueCount + ((notificationData?.notifications || []).filter((item) => item.status !== 'Read').length);
+  const feesPendingCount = data?.readyCases?.length ?? 0;
+  const unreadNotifications = (notificationData?.notifications || []).filter((item) => item.status !== 'Read');
+  const notificationCount = unreadNotifications.length;
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
-  const notifications = (notificationData?.notifications || []).filter((item) => item.status !== 'Read');
+  const menuRef = useRef(null);
+  const menuButtonRef = useRef(null);
+  const notificationRef = useRef(null);
+  const notificationButtonRef = useRef(null);
+  const notifications = notificationData?.notifications || [];
   useEffect(() => {
     const refreshShell = () => setRefresh((value) => value + 1);
     window.addEventListener('smile-records-refresh', refreshShell);
@@ -520,14 +586,62 @@ function MobileShell({ role }) {
       window.removeEventListener('smile-records-fees-change', refreshShell);
     };
   }, []);
+  useEffect(() => {
+    const closeFloatingPanels = (event) => {
+      const target = event.target;
+      if (
+        menuOpen &&
+        !menuRef.current?.contains(target) &&
+        !menuButtonRef.current?.contains(target)
+      ) {
+        setMenuOpen(false);
+      }
+      if (
+        notificationOpen &&
+        !notificationRef.current?.contains(target) &&
+        !notificationButtonRef.current?.contains(target)
+      ) {
+        setNotificationOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', closeFloatingPanels);
+    return () => document.removeEventListener('pointerdown', closeFloatingPanels);
+  }, [menuOpen, notificationOpen]);
   const logout = () => {
     localStorage.removeItem(SESSION_KEY);
     navigate('/login');
   };
+  const notificationTarget = (item) => {
+    if (item.type === 'fees-reconciliation') return isDoctor ? '/doctor/reconciliation' : '/assistant/reconciliation';
+    if (item.type === 'case' && item.entityId) return isDoctor ? `/doctor/case/${item.entityId}` : `/assistant/case/${item.entityId}`;
+    return PROFILE_COPY[role].home;
+  };
+  const openNotifications = async () => {
+    const nextOpen = !notificationOpen;
+    setNotificationOpen(nextOpen);
+    if (nextOpen && unreadNotifications.length) {
+      try {
+        await apiPost('/notifications/read-all', { email: currentUser?.email }, 'PATCH');
+        setRefresh((value) => value + 1);
+      } catch {
+        // Keep the panel usable even if read-state sync fails.
+      }
+    }
+  };
+  const openNotification = async (item) => {
+    try {
+      await apiPost(`/notifications/${item.id}/read`, { email: currentUser?.email }, 'PATCH');
+    } catch {
+      // Navigation should still work if read-state sync fails.
+    }
+    setNotificationOpen(false);
+    setRefresh((value) => value + 1);
+    navigate(notificationTarget(item));
+  };
   const menuItems = isDoctor
     ? [
         { to: '/doctor/dashboard', label: 'Dashboard', icon: Gauge },
-        { to: '/doctor/queue', label: 'Queue', icon: ClipboardList },
+        { to: '/doctor/fees', label: 'Fees', icon: ReceiptIndianRupee, badge: feesPendingCount },
         { to: '/doctor/assistants', label: 'Assistant Mapping', icon: Users },
         { to: '/doctor/reconciliation', label: 'Fees Reconciliation', icon: ReceiptIndianRupee }
       ]
@@ -539,7 +653,7 @@ function MobileShell({ role }) {
       ];
   const bottomTabs = isDoctor
     ? [
-        { to: '/doctor/queue', label: 'Queue', icon: ClipboardList },
+        { to: '/doctor/fees', label: 'Fees', icon: ReceiptIndianRupee, badge: feesPendingCount },
         { to: '/doctor/dashboard', label: 'Dashboard', icon: Gauge }
       ]
     : [];
@@ -558,27 +672,30 @@ function MobileShell({ role }) {
           </button>
         </div>
         <div className="mobile-header-actions">
-          <button className="icon-button notification-button" type="button" aria-label="Notifications" onClick={() => setNotificationOpen((value) => !value)}>
+          <button ref={notificationButtonRef} className="icon-button notification-button" type="button" aria-label="Notifications" onClick={openNotifications}>
             <Bell size={18} />
-            {queueCount > 0 && <span className="notification-count">{queueCount}</span>}
+            {notificationCount > 0 && <span className="notification-count">{notificationCount}</span>}
           </button>
           <button className="icon-button" type="button" aria-label="Logout" onClick={logout}>
             <LogOut size={18} />
           </button>
-          <button className="icon-button menu-trigger" type="button" aria-label="Open menu" onClick={() => setMenuOpen((value) => !value)}>
+          <button ref={menuButtonRef} className="icon-button menu-trigger" type="button" aria-label="Open menu" onClick={() => setMenuOpen((value) => !value)}>
             <Menu size={18} />
           </button>
         </div>
-        {menuOpen && <MobileProfileMenu role={role} tabs={menuItems} onClose={() => setMenuOpen(false)} onLogout={logout} />}
+        {menuOpen && <MobileProfileMenu ref={menuRef} role={role} tabs={menuItems} onClose={() => setMenuOpen(false)} onLogout={logout} />}
         {notificationOpen && (
-          <div className="mobile-notification-panel">
-            <strong>Notifications</strong>
+          <div className="mobile-notification-panel" ref={notificationRef}>
+            <header>
+              <strong>Notifications</strong>
+              <button type="button" aria-label="Close notifications" onClick={() => setNotificationOpen(false)}><X size={15} /></button>
+            </header>
             {notifications.length ? notifications.map((item) => (
-              <article key={item.id}>
+              <button className={item.status === 'Read' ? 'read' : ''} type="button" key={item.id} onClick={() => openNotification(item)}>
                 <span>{item.title}</span>
                 <small>{item.message}</small>
-              </article>
-            )) : <p>No unread notifications.</p>}
+              </button>
+            )) : <p>No notifications.</p>}
           </div>
         )}
       </header>
@@ -595,12 +712,12 @@ function MobileShell({ role }) {
   );
 }
 
-function MobileProfileMenu({ role, tabs, onClose, onLogout }) {
+const MobileProfileMenu = React.forwardRef(function MobileProfileMenu({ role, tabs, onClose, onLogout }, ref) {
   const navigate = useNavigate();
   const home = PROFILE_COPY[role].home;
   const links = [{ to: home, label: 'Home', icon: Home }, ...tabs.filter((tab) => tab.to !== home)];
   return (
-    <div className="mobile-menu-panel">
+    <div className="mobile-menu-panel" ref={ref}>
       {links.map((item) => (
         <button
           className="mobile-menu-link"
@@ -622,18 +739,106 @@ function MobileProfileMenu({ role, tabs, onClose, onLogout }) {
       </button>
     </div>
   );
-}
+});
 
 function ProfileWelcome({ role }) {
   const copy = PROFILE_COPY[role];
-  const currentUser = getStoredUser();
+  const [currentUser, setCurrentUser] = useSyncedCurrentUser();
   return (
     <section className="profile-welcome">
       <div>
         <strong>{getGreeting()}, {displayUserName(currentUser, copy.name)}</strong>
         <span>{copy.greeting}</span>
       </div>
+      <ProfilePhotoButton user={currentUser} onUserChange={setCurrentUser} />
     </section>
+  );
+}
+
+function ProfilePhotoButton({ user, onUserChange, compact = false }) {
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const updateStoredUser = (nextUser) => {
+    storeCurrentUser(nextUser);
+    onUserChange?.(nextUser);
+    window.dispatchEvent(new Event('smile-records-refresh'));
+  };
+
+  const savePhoto = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(png|jpeg|jpg|webp)$/i.test(file.type)) {
+      setMessage('Upload PNG, JPG, or WEBP image only.');
+      return;
+    }
+    if (file.size > 600 * 1024) {
+      setMessage('Image should be below 600 KB.');
+      return;
+    }
+    setSaving(true);
+    setMessage('');
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const result = await apiPost('/users/profile-photo', { email: user.email, profilePhoto: reader.result }, 'PATCH');
+        updateStoredUser(result.user);
+        setMessage('Profile photo updated.');
+      } catch (error) {
+        setMessage(error.message);
+      } finally {
+        setSaving(false);
+        event.target.value = '';
+      }
+    };
+    reader.onerror = () => {
+      setSaving(false);
+      setMessage('Unable to read selected image.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const deletePhoto = async () => {
+    setSaving(true);
+    setMessage('');
+    try {
+      const result = await apiPost('/users/profile-photo', { email: user.email, action: 'delete' }, 'PATCH');
+      updateStoredUser(result.user);
+      setMessage('Profile photo removed.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className={compact ? 'profile-photo-control compact' : 'profile-photo-control'}>
+      <button className="profile-photo-button" type="button" onClick={() => setOpen((value) => !value)} aria-label="Profile photo">
+        {user?.profilePhoto ? <img src={user.profilePhoto} alt="" /> : <UserRound size={compact ? 18 : 20} />}
+      </button>
+      {open && (
+        <div className="profile-photo-popover">
+          <div className="profile-photo-preview">
+            {user?.profilePhoto ? <img src={user.profilePhoto} alt="Profile" /> : <span>{userInitials(user)}</span>}
+          </div>
+          <strong>{displayUserName(user)}</strong>
+          <small>{user?.role || 'User'}</small>
+          {message && <p>{message}</p>}
+          <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={savePhoto} hidden />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={saving}>
+            <Camera size={15} />{user?.profilePhoto ? 'Update photo' : 'Add photo'}
+          </button>
+          {user?.profilePhoto && (
+            <button className="danger" type="button" onClick={deletePhoto} disabled={saving}>
+              <Trash2 size={15} />Delete photo
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -843,7 +1048,7 @@ function AssistantIntake() {
 
   return (
     <MobilePage
-      title={mode === 'new' ? 'New Appointment' : 'Appointments'}
+      title={mode === 'new' ? 'New Appointment' : <span className="assistant-appointments-title">Appointments</span>}
       subtitle={mode === 'new' ? 'Add patient details and submit to doctor.' : ''}
       action={mode === 'appointments'
         ? <DatePickerControl value={selectedDate} onChange={setSelectedDate} />
@@ -1042,16 +1247,23 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
   const tiles = [
     { label: 'All', status: 'all', value: scopedAppointments.length },
     { label: 'Scheduled', status: 'scheduled', value: counts.scheduled || 0 },
-    { label: "Doctor's Queue", status: 'doctor_queue', value: counts.doctor_queue || 0 },
+    { label: "DR's Que", status: 'doctor_queue', value: counts.doctor_queue || 0 },
     { label: 'Fees Collection', status: 'doctor_done', value: counts.doctor_done || 0 },
     { label: 'Closed', status: 'complete', value: counts.complete || 0 },
     { label: 'Cancelled', status: 'cancelled', value: counts.cancelled || 0 }
   ];
+  const liveLabelParts = label.endsWith(' - Live') ? label.split(' - Live') : null;
 
   return (
     <section className="today-dashboard">
       <header>
-        <strong>{label}</strong>
+        <strong>
+          {liveLabelParts ? (
+            <>
+              {liveLabelParts[0]} - <span className="live-header-text">Live</span>
+            </>
+          ) : label}
+        </strong>
         <span>{loading ? 'Syncing' : `${scopedAppointments.length} appointments`}</span>
       </header>
       <div className="today-status-grid">
@@ -1139,6 +1351,41 @@ function AssistantFeesQueue() {
   );
 }
 
+function DoctorFeesQueue() {
+  const [currentUser] = useSyncedCurrentUser();
+  const [selectedDate, setSelectedDate] = useState(todayDate());
+  const [paymentFilter, setPaymentFilter] = useState('all');
+  const [refresh, setRefresh] = useState(0);
+  const feesPath = `/fees-summary?doctorEmail=${encodeURIComponent(currentUser?.email || '')}&date=${encodeURIComponent(selectedDate)}`;
+  const { data, loading, error } = useApi(feesPath, refresh);
+
+  useEffect(() => {
+    const refreshFees = () => setRefresh((value) => value + 1);
+    window.addEventListener('smile-records-refresh', refreshFees);
+    window.addEventListener('smile-records-fees-change', refreshFees);
+    return () => {
+      window.removeEventListener('smile-records-refresh', refreshFees);
+      window.removeEventListener('smile-records-fees-change', refreshFees);
+    };
+  }, []);
+
+  const paidCases = (data?.cases || []).filter((item) => (
+    paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter
+  ));
+
+  return (
+    <MobilePage title="Fees Collection" action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
+      <FeesDashboard data={data} active={paymentFilter} onChange={setPaymentFilter} />
+      <MobileSection title={`Fees Pending (${data?.readyCases?.length || 0})`}>
+        <FeesWorkflowList loading={loading} error={error} cases={data?.readyCases || []} mode="ready" toPrefix="/doctor/case" />
+      </MobileSection>
+      <MobileSection title={`Fees Collected (${paidCases.length})`}>
+        <FeesWorkflowList loading={loading} error={error} cases={paidCases} mode="paid" toPrefix="/doctor/case" />
+      </MobileSection>
+    </MobilePage>
+  );
+}
+
 function FeesDashboard({ data, active, onChange }) {
   const summary = data?.summary || {};
   const tiles = [
@@ -1174,7 +1421,7 @@ function DoctorWiseFees({ rows }) {
   );
 }
 
-function FeesWorkflowList({ loading, error, cases, mode = 'ready' }) {
+function FeesWorkflowList({ loading, error, cases, mode = 'ready', toPrefix = '/assistant/case' }) {
   const [message, setMessage] = useState('');
   if (loading) return <p className="muted">Loading fees queue...</p>;
   if (error) return <p className="error-text">Unable to load fees queue: {error.message}</p>;
@@ -1187,7 +1434,7 @@ function FeesWorkflowList({ loading, error, cases, mode = 'ready' }) {
         <NavLink
           className="fees-queue-row"
           key={item.id}
-          to={`/assistant/case/${item.id}`}
+          to={`${toPrefix}/${item.id}`}
           state={{ from: 'fees' }}
           onClick={(event) => {
             if (mode === 'paid') {
@@ -1626,8 +1873,9 @@ function DoctorQueue() {
   const dashboardStatus = tab === 'my' ? 'doctor_queue' : 'all';
   const doctorId = tab === 'my' ? currentUser?.id : '';
   const mappedScope = tab === 'overall' ? currentUser?.email : '';
+  const pageTitle = tab === 'my' ? 'My Queue' : 'Overall Queue';
   return (
-    <MobilePage title="My Queue" subtitle="Appointments sent by assistant for consultation." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
+    <MobilePage title={<span className="doctor-queue-title">{pageTitle}</span>} action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       <div className="doctor-tabs">
         <button className={tab === 'my' ? 'active' : ''} type="button" onClick={() => setTab('my')}>My Queue</button>
         <button className={tab === 'overall' ? 'active' : ''} type="button" onClick={() => setTab('overall')}>Overall Queue</button>
@@ -1636,7 +1884,7 @@ function DoctorQueue() {
         selectedDate={selectedDate}
         activeStatus={dashboardStatus}
         onStatusChange={() => {}}
-        label={tab === 'my' ? 'My Queue Status - Live' : 'Overall Queue Status - Live'}
+        label={tab === 'my' ? 'My Queue - Live' : 'Overall Queue - Live'}
         scopeStatus={tab === 'my' ? 'doctor_queue' : ''}
         doctorId={doctorId}
         doctorEmail={mappedScope}
@@ -1766,6 +2014,8 @@ function DoctorCase() {
 }
 
 function MobileAnalytics({ role }) {
+  if (role === 'doctor') return <DoctorDashboard />;
+
   const [refresh, setRefresh] = useState(0);
   const { data: dashboard } = useApi('/dashboard', refresh);
   const { data: analytics } = useApi('/analytics', refresh);
@@ -1841,6 +2091,99 @@ function MobileAnalytics({ role }) {
             </NavLink>
           )}
         </div>
+      </section>
+    </MobilePage>
+  );
+}
+
+function DoctorDashboard() {
+  const [currentUser] = useSyncedCurrentUser();
+  const [refresh, setRefresh] = useState(0);
+  const [fromDate, setFromDate] = useState(todayDate());
+  const [toDate, setToDate] = useState(todayDate());
+  const rangeError = validateDashboardRange(fromDate, toDate);
+  const dashboardPath = `/doctor-dashboard?doctorEmail=${encodeURIComponent(currentUser?.email || '')}&from=${encodeURIComponent(fromDate)}&to=${encodeURIComponent(toDate)}`;
+  const { data, loading, error } = useApi(dashboardPath, refresh);
+
+  useEffect(() => {
+    const refreshDashboard = () => setRefresh((value) => value + 1);
+    window.addEventListener('smile-records-refresh', refreshDashboard);
+    window.addEventListener('smile-records-queue-change', refreshDashboard);
+    window.addEventListener('smile-records-fees-change', refreshDashboard);
+    return () => {
+      window.removeEventListener('smile-records-refresh', refreshDashboard);
+      window.removeEventListener('smile-records-queue-change', refreshDashboard);
+      window.removeEventListener('smile-records-fees-change', refreshDashboard);
+    };
+  }, []);
+
+  const metrics = data?.metrics || {};
+  const amountCollected = metrics.amountCollected || {};
+  const cards = [
+    { label: 'Patient Served', value: metrics.patientServed || 0, tone: 'served' },
+    { label: 'Open Cases', value: metrics.openCases || 0, tone: 'open' },
+    { label: 'Cancel Cases', value: metrics.cancelledCases || 0, tone: 'cancel' },
+    { label: 'Cash Collected', value: formatCurrency(amountCollected.cashAmount), tone: 'cash' },
+    { label: 'UPI Collected', value: formatCurrency(amountCollected.upiAmount), tone: 'upi' }
+  ];
+
+  return (
+    <MobilePage title="Dashboard">
+      <section className="doctor-dashboard-range mobile-section">
+        <header>
+          <div>
+            <strong>Doctor Dashboard</strong>
+            <span>Select date range up to 366 days</span>
+          </div>
+          <CalendarDays size={20} />
+        </header>
+        <div className="dashboard-date-range">
+          <label>
+            <span>From</span>
+            <input type="date" value={fromDate} max={toDate} onChange={(event) => setFromDate(event.target.value)} />
+          </label>
+          <label>
+            <span>To</span>
+            <input type="date" value={toDate} min={fromDate} onChange={(event) => setToDate(event.target.value)} />
+          </label>
+        </div>
+        {rangeError && <p className="error-text compact-note">{rangeError}</p>}
+      </section>
+
+      <section className="mobile-section">
+        <div className="doctor-dashboard-grid">
+          {cards.map((card) => (
+            <article className={`doctor-dashboard-card ${card.tone}`} key={card.label}>
+              <strong>{card.value}</strong>
+              <span>{card.label}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="mobile-section">
+        <h3>Daily Summary</h3>
+        {loading && <p className="muted">Loading doctor dashboard...</p>}
+        {(error || rangeError) && <p className="error-text">{rangeError || `Unable to load dashboard: ${error.message}`}</p>}
+        {!loading && !error && !rangeError && (
+          <div className="doctor-daily-list">
+            {(data?.daily || []).filter((day) => (
+              day.patientServed || day.openCases || day.cancelledCases || day.cashAmount || day.upiAmount
+            )).map((day) => (
+              <article className="doctor-daily-row" key={day.date}>
+                <div>
+                  <strong>{formatDateOnly(day.date)}</strong>
+                  <span>{day.openCases} open | {day.patientServed} served | {day.cancelledCases} cancelled</span>
+                </div>
+                <b>{formatCurrency(day.cashAmount)} Cash</b>
+                <b>{formatCurrency(day.upiAmount)} UPI</b>
+              </article>
+            ))}
+            {!(data?.daily || []).some((day) => day.patientServed || day.openCases || day.cancelledCases || day.cashAmount || day.upiAmount) && (
+              <p className="muted">No doctor activity found for selected date range.</p>
+            )}
+          </div>
+        )}
       </section>
     </MobilePage>
   );
@@ -1986,6 +2329,7 @@ function DoctorBottomDock({ tabs = [] }) {
       {tabs.map((tab) => (
         <button className={location.pathname === tab.to ? 'active' : ''} type="button" key={tab.to} onClick={() => navigate(tab.to)}>
           <tab.icon size={18} />
+          {tab.badge > 0 && <span className="dock-tab-badge">{tab.badge}</span>}
           <span>{tab.label}</span>
         </button>
       ))}
@@ -2110,7 +2454,11 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
   const closedAppointments = visibleAppointments.filter((item) => isClosedAppointment(item));
   const cancelledAppointments = visibleAppointments.filter((item) => isCancelledAppointment(item));
   const editAppointment = (item) => {
-    if (role !== 'assistant') return;
+    if (role === 'doctor') {
+      if (item.caseId && !isCancelledAppointment(item)) navigate(`/doctor/case/${item.caseId}`);
+      else setMessage('This appointment is not linked with a patient case yet.');
+      return;
+    }
     if (isClosedAppointment(item) || isCancelledAppointment(item)) {
       setMessage('Closed or cancelled case cannot be edited.');
       return;
@@ -2182,6 +2530,7 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
 function AppointmentRow({ item, index, role, dragIndex, setDragIndex, moveAppointment, editAppointment, updateAppointment, navigate }) {
   const locked = isClosedAppointment(item) || isCancelledAppointment(item);
   const statusText = appointmentStatusLabel(item);
+  const showStatus = !(role === 'doctor' && item.status === 'doctor_queue');
   return (
     <div
       className={`${dragIndex === index ? 'appointment-row dragging' : 'appointment-row'}${locked ? ' locked-row' : ''}`}
@@ -2203,7 +2552,7 @@ function AppointmentRow({ item, index, role, dragIndex, setDragIndex, moveAppoin
         </div>
       </div>
       <div className="appointment-send-cell">
-        <Status value={statusText} />
+        {showStatus && <Status value={statusText} />}
         <AppointmentAction item={item} role={role} onAction={updateAppointment} />
       </div>
     </div>
@@ -2217,9 +2566,21 @@ function AppointmentAction({ item, role, onAction }) {
   if (role === 'doctor') {
     if (item.status === 'doctor_queue' || item.status === 'waiting') {
       return (
-        <button className="send-appointment-button" type="button" onClick={(event) => onAction(event, item, 'edit')} draggable={false}>
-          Open
-        </button>
+        <div className="appointment-action-stack doctor-open-actions">
+          <button
+            className="send-appointment-button icon-action muted-action"
+            type="button"
+            title="Send back to Assistant queue"
+            aria-label="Send back to Assistant queue"
+            onClick={(event) => onAction(event, item, 'recall-to-waiting', 'Send this case back to Assistant queue?')}
+            draggable={false}
+          >
+            <Send size={13} />
+          </button>
+          <button className="send-appointment-button" type="button" onClick={(event) => onAction(event, item, 'edit')} draggable={false}>
+            Open
+          </button>
+        </div>
       );
     }
     if (item.status === 'doctor_done' || item.status === 'complete') {
@@ -2269,7 +2630,7 @@ function AppointmentAction({ item, role, onAction }) {
 
 function AdminShell() {
   const navigate = useNavigate();
-  const currentUser = getStoredUser();
+  const [currentUser, setCurrentUser] = useSyncedCurrentUser();
   const { data } = useApi('/users');
   const pendingCount = (data?.users || []).filter((user) => user.status === 'Pending').length;
   const logout = () => {
@@ -2316,7 +2677,11 @@ function AdminShell() {
               {pendingCount > 0 && <span className="notification-count">{pendingCount}</span>}
             </NavLink>
             <button className="secondary-button compact-action" type="button" onClick={logout}><LogOut size={17} />Logout</button>
-            <div className="user-chip"><span>AD</span><div><strong>{displayUserName(currentUser, 'Clinic Admin')}</strong><small>{currentUser?.role || 'Super Admin'}</small></div></div>
+            <ProfilePhotoButton user={currentUser} onUserChange={setCurrentUser} compact />
+            <div className="user-chip">
+              <span>{currentUser?.profilePhoto ? <img src={currentUser.profilePhoto} alt="" /> : userInitials(currentUser)}</span>
+              <div><strong>{displayUserName(currentUser, 'Clinic Admin')}</strong><small>{currentUser?.role || 'Super Admin'}</small></div>
+            </div>
           </div>
         </header>
         <Outlet />
@@ -3558,7 +3923,7 @@ function appointmentStatusLabel(item) {
 function caseStatusLabel(item) {
   if (item.status === 'cancelled') return 'Cancelled';
   if (item.status === 'completed' || item.visitStatus === 'visit_complete') return 'Closed';
-  if (item.status === 'doctor_queue') return "Open - Doctor's Queue";
+  if (item.status === 'doctor_queue') return "Open - DR's Que";
   if (item.status === 'assistant_closure' && item.visitStatus === 'doctor_done') return 'Open - Fees Pending';
   if (item.status === 'assistant_closure') return 'Fees Collected';
   if (item.status === 'assistant_intake') return 'Open - Scheduled';
@@ -3642,6 +4007,17 @@ function formatDateOnly(value) {
 function formatCurrency(value) {
   const amount = Number(String(value || 0).replace(/[^\d.]/g, '')) || 0;
   return `Rs. ${amount.toLocaleString('en-IN')}`;
+}
+
+function validateDashboardRange(fromDate, toDate) {
+  if (!fromDate || !toDate) return 'Select both From and To dates.';
+  const from = Date.parse(`${fromDate}T00:00:00`);
+  const to = Date.parse(`${toDate}T00:00:00`);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 'Select a valid date range.';
+  if (from > to) return 'From date cannot be after To date.';
+  const days = Math.floor((to - from) / 86400000) + 1;
+  if (days > 366) return 'Date range cannot be more than 366 days.';
+  return '';
 }
 
 function emptyPatientDraft() {
@@ -3736,7 +4112,7 @@ function saveDraft(payload) {
 }
 
 function formatStatus(status) {
-  if (status === 'doctor_queue') return "Doctor's Queue";
+  if (status === 'doctor_queue') return "DR's Que";
   if (status === 'doctor_done') return 'Fees Collection';
   if (status === 'assistant_closure') return 'Fees Pending';
   return String(status || '').split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
