@@ -685,13 +685,18 @@ td span {
 
 .mobile-header-actions {
   flex: 0 0 auto;
-  gap: 5px;
+  gap: 6px;
   position: relative;
 }
 
 .mobile-header .icon-button {
-  height: 34px;
-  width: 34px;
+  height: 39px;
+  width: 39px;
+}
+
+.mobile-header .icon-button svg {
+  height: 20px;
+  width: 20px;
 }
 
 .notification-button {
@@ -824,15 +829,15 @@ td span {
   color: var(--primary-strong);
   cursor: pointer;
   display: inline-flex;
-  height: 42px;
+  height: 50px;
   justify-content: center;
   overflow: hidden;
-  width: 42px;
+  width: 50px;
 }
 
 .profile-photo-control.compact .profile-photo-button {
-  height: 38px;
-  width: 38px;
+  height: 42px;
+  width: 42px;
 }
 
 .profile-photo-button img {
@@ -848,12 +853,29 @@ td span {
   box-shadow: var(--shadow);
   display: grid;
   gap: 8px;
-  min-width: 210px;
-  padding: 12px;
+  min-width: 250px;
+  padding: 16px 12px 12px;
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
   z-index: 40;
+}
+
+.profile-popover-close {
+  align-items: center;
+  background: #eef6ff !important;
+  border: 1px solid #cfe3f7 !important;
+  border-radius: 50% !important;
+  color: var(--primary-strong) !important;
+  display: inline-flex !important;
+  height: 28px !important;
+  justify-content: center !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 28px !important;
 }
 
 .profile-photo-preview {
@@ -865,11 +887,11 @@ td span {
   display: flex;
   font-size: 18px;
   font-weight: 900;
-  height: 74px;
+  height: 104px;
   justify-content: center;
   justify-self: center;
   overflow: hidden;
-  width: 74px;
+  width: 104px;
 }
 
 .profile-photo-preview img {
@@ -3289,7 +3311,7 @@ button.date-selector {
 .doctor-dashboard-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .doctor-dashboard-card {
@@ -3308,7 +3330,7 @@ button.date-selector {
 
 .doctor-dashboard-card strong {
   color: var(--primary);
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1.1;
 }
 
@@ -3317,6 +3339,10 @@ button.date-selector {
   font-size: 12px;
   font-weight: 900;
   margin-top: 8px;
+}
+
+.doctor-dashboard-card.total strong {
+  color: var(--primary);
 }
 
 .doctor-dashboard-card.cancel strong {

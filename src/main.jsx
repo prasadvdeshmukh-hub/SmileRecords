@@ -167,11 +167,16 @@ function broadcastClinicRefresh() {
 }
 
 function focusPageTop(behavior = 'auto') {
-  window.requestAnimationFrame(() => {
+  const scroll = () => {
     window.scrollTo({ top: 0, left: 0, behavior });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    document.querySelector('.mobile-app')?.scrollTo?.({ top: 0, left: 0, behavior });
     document.querySelector('.mobile-content')?.scrollTo?.({ top: 0, left: 0, behavior });
-    document.querySelector('.mobile-page')?.scrollIntoView?.({ block: 'start', behavior });
-  });
+  };
+  window.requestAnimationFrame(scroll);
+  window.setTimeout(scroll, 40);
+  window.setTimeout(scroll, 180);
 }
 
 function apiHeaders(extra = {}) {
@@ -355,6 +360,7 @@ function Login() {
       const result = await apiPost('/auth/login', { email: loginEmail, provider: 'Google' });
       storeCurrentUser(result.user);
       navigate(isSubscriptionUsable(result.user) ? roleHome(result.user.role) : '/subscription');
+      focusPageTop();
     } catch (error) {
       setMessage(error.message);
       if (error.status === 404 || error.status === 403) setMode('request');
@@ -517,6 +523,7 @@ function SubscriptionGate() {
           setUser(verified.user);
           setMessage('Subscription payment verified. Access is active.');
           navigate(roleHome(verified.user.role));
+          focusPageTop();
         },
         modal: {
           ondismiss: () => setMessage('Payment was not completed. Subscription access remains locked after free trial expiry.')
@@ -552,7 +559,7 @@ function SubscriptionGate() {
           <div><span>Monthly fee</span><strong>{formatCurrency(config.amount || 999)}</strong></div>
         </div>
         {isUsable ? (
-          <button className="primary-button" type="button" onClick={() => navigate(roleHome(user.role))}>
+          <button className="primary-button" type="button" onClick={() => { navigate(roleHome(user.role)); focusPageTop(); }}>
             <CheckCircle2 size={18} />Continue to app
           </button>
         ) : (
@@ -792,30 +799,23 @@ function ProfilePhotoButton({ user, onUserChange, compact = false }) {
       setMessage('Upload PNG, JPG, or WEBP image only.');
       return;
     }
-    if (file.size > 600 * 1024) {
-      setMessage('Image should be below 600 KB.');
+    if (file.size > 8 * 1024 * 1024) {
+      setMessage('Image should be below 8 MB.');
       return;
     }
     setSaving(true);
-    setMessage('');
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const result = await apiPost('/users/profile-photo', { email: user.email, profilePhoto: reader.result }, 'PATCH');
-        updateStoredUser(result.user);
-        setMessage('Profile photo updated.');
-      } catch (error) {
-        setMessage(error.message);
-      } finally {
-        setSaving(false);
-        event.target.value = '';
-      }
-    };
-    reader.onerror = () => {
+    setMessage('Optimizing photo...');
+    try {
+      const profilePhoto = await resizeProfilePhoto(file);
+      const result = await apiPost('/users/profile-photo', { email: user.email, profilePhoto }, 'PATCH');
+      updateStoredUser(result.user);
+      setMessage('Profile photo updated.');
+    } catch (error) {
+      setMessage(error.message || 'Unable to process selected image.');
+    } finally {
       setSaving(false);
-      setMessage('Unable to read selected image.');
-    };
-    reader.readAsDataURL(file);
+      event.target.value = '';
+    }
   };
 
   const deletePhoto = async () => {
@@ -839,6 +839,9 @@ function ProfilePhotoButton({ user, onUserChange, compact = false }) {
       </button>
       {open && (
         <div className="profile-photo-popover">
+          <button className="profile-popover-close" type="button" aria-label="Close profile photo" onClick={() => setOpen(false)}>
+            <X size={14} />
+          </button>
           <div className="profile-photo-preview">
             {user?.profilePhoto ? <img src={user.profilePhoto} alt="Profile" /> : <span>{userInitials(user)}</span>}
           </div>
@@ -858,6 +861,37 @@ function ProfilePhotoButton({ user, onUserChange, compact = false }) {
       )}
     </div>
   );
+}
+
+function resizeProfilePhoto(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      const size = 220;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        reject(new Error('Unable to prepare image thumbnail.'));
+        return;
+      }
+      const sourceSize = Math.min(image.naturalWidth, image.naturalHeight);
+      const sourceX = (image.naturalWidth - sourceSize) / 2;
+      const sourceY = (image.naturalHeight - sourceSize) / 2;
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, size, size);
+      context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
+      resolve(canvas.toDataURL('image/jpeg', 0.72));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Unable to read selected image.'));
+    };
+    image.src = url;
+  });
 }
 
 function WorkflowRail({ role }) {
@@ -1646,9 +1680,10 @@ function AssistantFeesReconciliation() {
 
 function DoctorFeesReconciliation() {
   const currentUser = getStoredUser();
+  const [selectedDate, setSelectedDate] = useState(todayDate());
   const [refresh, setRefresh] = useState(0);
   const [message, setMessage] = useState('');
-  const { data, loading, error } = useApi(`/fees-reconciliations?doctorEmail=${encodeURIComponent(currentUser?.email || '')}`, refresh);
+  const { data, loading, error } = useApi(`/fees-reconciliations?doctorEmail=${encodeURIComponent(currentUser?.email || '')}&date=${encodeURIComponent(selectedDate)}`, refresh);
 
   const approveRecon = async (item) => {
     setMessage('');
@@ -1662,7 +1697,7 @@ function DoctorFeesReconciliation() {
   };
 
   return (
-    <MobilePage title="Fees Reconciliation" subtitle="Review open submissions and confirm receipt.">
+    <MobilePage title="Fees Reconciliation" subtitle="Review open submissions and confirm receipt." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       {message && <div className="notice">{message}</div>}
       {loading && <p className="muted">Loading reconciliations...</p>}
       {error && <p className="error-text">Unable to load reconciliations: {error.message}</p>}
@@ -2142,12 +2177,14 @@ function DoctorDashboard() {
 
   const metrics = data?.metrics || {};
   const amountCollected = metrics.amountCollected || {};
+  const totalCollected = (amountCollected.cashAmount || 0) + (amountCollected.upiAmount || 0);
   const cards = [
     { label: 'Patient Served', value: metrics.patientServed || 0, tone: 'served' },
     { label: 'Open Cases', value: metrics.openCases || 0, tone: 'open' },
     { label: 'Cancel Cases', value: metrics.cancelledCases || 0, tone: 'cancel' },
-    { label: 'Cash Collected', value: formatCurrency(amountCollected.cashAmount), tone: 'cash' },
-    { label: 'UPI Collected', value: formatCurrency(amountCollected.upiAmount), tone: 'upi' }
+    { label: 'Total Collected', value: formatCurrency(totalCollected), tone: 'total' },
+    { label: 'UPI Collected', value: formatCurrency(amountCollected.upiAmount), tone: 'upi' },
+    { label: 'Cash Collected', value: formatCurrency(amountCollected.cashAmount), tone: 'cash' }
   ];
 
   return (

@@ -31,7 +31,7 @@ let db = await loadDb();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use(requireActiveSubscriptionForAppApi);
 app.use(persistSuccessfulMutations);
 
@@ -88,14 +88,14 @@ app.get('/api/doctor-dashboard', (req, res) => {
   const doctor = findDoctor(req.query.doctorId, req.query.doctorEmail);
   if (req.query.doctorEmail && !doctor) return res.status(404).json({ error: 'Doctor not found' });
 
-  const scopedCases = doctor ? db.cases.filter((item) => isCaseVisibleToDoctor(item, doctor)) : db.cases;
-  const activeCases = scopedCases.filter((item) => isInDateRange(caseActivityDate(item), from, to));
+  const scopedCases = doctor ? db.cases.filter((item) => isCaseOwnedByDoctor(item, doctor)) : db.cases;
+  const activeCases = scopedCases.filter((item) => isInDateRange(caseDashboardDate(item), from, to));
   const servedCases = scopedCases.filter((item) => (
     isCompletedCase(item) && isInDateRange(caseCompletionDate(item), from, to)
   ));
   const openCases = activeCases.filter((item) => !isCompletedCase(item) && !isCancelledCase(item));
   const cancelledCases = scopedCases.filter((item) => (
-    isCancelledCase(item) && isInDateRange(caseActivityDate(item), from, to)
+    isCancelledCase(item) && isInDateRange(caseDashboardDate(item), from, to)
   ));
   const paidCases = scopedCases.filter((item) => (
     item.closure?.closedAt
@@ -908,8 +908,8 @@ app.patch('/api/users/profile-photo', (req, res) => {
   if (!/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(profilePhoto)) {
     return res.status(400).json({ error: 'Upload a PNG, JPG, or WEBP profile photo' });
   }
-  if (profilePhoto.length > 850000) {
-    return res.status(400).json({ error: 'Profile photo is too large. Please use an image below 600 KB.' });
+  if (profilePhoto.length > 220000) {
+    return res.status(400).json({ error: 'Profile photo is too large. Please upload a smaller image or retry so it can be compressed.' });
   }
   user.profilePhoto = profilePhoto;
   log('USER_UPDATE_PROFILE_PHOTO', user.name, user.id, { req, module: 'Profile', actorRole: user.role, entityType: 'User', entityId: user.id });
@@ -1451,6 +1451,11 @@ function caseCompletionDate(item) {
   return (item.completedAt || item.closure?.closedAt || item.updatedAt || item.doctor?.submittedAt || item.createdAt || today()).slice(0, 10);
 }
 
+function caseDashboardDate(item) {
+  const appointment = db.appointments.find((record) => record.caseId === item.id || record.queueNumber === item.queueNumber);
+  return (item.patient?.appointmentDate || appointment?.date || item.createdAt || item.updatedAt || today()).slice(0, 10);
+}
+
 function caseActivityDate(item) {
   return (item.closure?.closedAt || item.doctor?.submittedAt || item.updatedAt || item.createdAt || today()).slice(0, 10);
 }
@@ -1507,9 +1512,9 @@ function buildDoctorDashboardDays(cases, from, to) {
   const toTime = Date.parse(`${to}T00:00:00.000Z`);
   for (let time = fromTime; time <= toTime; time += 86400000) {
     const date = new Date(time).toISOString().slice(0, 10);
-    const activeCases = cases.filter((item) => caseActivityDate(item) === date);
+    const activeCases = cases.filter((item) => caseDashboardDate(item) === date);
     const servedCases = cases.filter((item) => isCompletedCase(item) && caseCompletionDate(item) === date);
-    const cancelledCases = cases.filter((item) => isCancelledCase(item) && caseActivityDate(item) === date);
+    const cancelledCases = cases.filter((item) => isCancelledCase(item) && caseDashboardDate(item) === date);
     const paidCases = cases.filter((item) => item.closure?.closedAt?.slice(0, 10) === date && item.closure?.feesCollected);
     const fees = buildFeesSummary(paidCases);
     days.push({
@@ -1523,6 +1528,10 @@ function buildDoctorDashboardDays(cases, from, to) {
     });
   }
   return days.reverse();
+}
+
+function isCaseOwnedByDoctor(item, doctor) {
+  return Boolean(doctor && item.hospitalId === doctor.hospitalId && item.assignedDoctorId === doctor.id);
 }
 
 function getMappedDoctorIdsForAssistant(assistant) {
