@@ -1644,9 +1644,18 @@ td span {
   padding: 10px;
 }
 
+.new-appointment-fit .doctor-select-panel {
+  gap: 6px;
+  padding: 6px 8px;
+}
+
 .doctor-select-panel > strong {
   font-size: 14px;
   white-space: nowrap;
+}
+
+.new-appointment-fit .doctor-select-panel > strong {
+  font-size: 13px;
 }
 
 .doctor-select-panel p {
@@ -3410,6 +3419,11 @@ button.date-selector {
   padding: 9px;
 }
 
+.new-patient-sheet.new-appointment-fit {
+  gap: 5px;
+  padding: 7px;
+}
+
 .sheet-header {
   align-items: center;
   display: flex;
@@ -3419,6 +3433,14 @@ button.date-selector {
 
 .sheet-header strong {
   font-size: 14px;
+}
+
+.new-appointment-fit .sheet-header {
+  min-height: 19px;
+}
+
+.new-appointment-fit .sheet-header strong {
+  font-size: 13px;
 }
 
 .sheet-header button {
@@ -3437,6 +3459,10 @@ button.date-selector {
   gap: 3px;
 }
 
+.new-appointment-fit .field {
+  gap: 2px;
+}
+
 .new-patient-sheet .field.wide {
   grid-column: 1 / -1;
 }
@@ -3452,6 +3478,13 @@ button.date-selector {
   padding: 6px 9px;
 }
 
+.new-appointment-fit .field input,
+.new-appointment-fit .field select {
+  border-radius: 8px;
+  min-height: 31px;
+  padding: 4px 8px;
+}
+
 .required-star {
   color: var(--danger);
   margin-left: 3px;
@@ -3465,6 +3498,11 @@ button.date-selector {
   gap: 2px;
   grid-column: 1 / -1;
   padding: 7px 9px;
+}
+
+.new-appointment-fit .returning-patient-note {
+  gap: 1px;
+  padding: 5px 7px;
 }
 
 .returning-patient-note strong {
@@ -3494,6 +3532,11 @@ button.date-selector {
   margin-top: 6px;
 }
 
+.new-appointment-fit .dedupe-actions {
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .dedupe-actions button {
   background: #ffffff;
   border: 1px solid var(--border);
@@ -3503,6 +3546,11 @@ button.date-selector {
   font-weight: 900;
   min-height: 34px;
   padding: 7px 8px;
+}
+
+.new-appointment-fit .dedupe-actions button {
+  min-height: 28px;
+  padding: 4px 6px;
 }
 
 .dedupe-actions button.active {
@@ -3731,11 +3779,26 @@ button.date-selector {
   grid-template-columns: 1fr;
 }
 
+.new-appointment-fit .sheet-actions {
+  gap: 8px;
+  margin-top: 2px;
+}
+
 .sheet-actions .primary-button,
 .sheet-actions .secondary-button {
   justify-content: center;
   min-height: 40px;
   padding: 8px 12px;
+}
+
+.new-appointment-fit .sheet-actions .primary-button {
+  min-height: 36px;
+  padding: 7px 10px;
+}
+
+.new-appointment-fit .sheet-actions .secondary-button {
+  margin-top: 8px;
+  min-height: 34px;
 }
 
 .dock-toast {
@@ -4352,6 +4415,24 @@ td span {
   font-size: 15px;
 }
 
+.new-appointment-fit .field span,
+.new-appointment-fit .doctor-select-panel .field span {
+  font-size: 12px;
+}
+
+.new-appointment-fit .field input,
+.new-appointment-fit .field select,
+.new-appointment-fit .doctor-select-panel .field select {
+  font-size: 13px;
+  min-height: 31px;
+  padding: 4px 8px;
+}
+
+.new-appointment-fit .doctor-select-panel > strong,
+.new-appointment-fit .sheet-header strong {
+  font-size: 13px;
+}
+
 .appointment-name,
 .case-card strong,
 .data-row strong,
@@ -4687,4 +4768,135 @@ td span {
     padding: 10px 12px;
     width: auto;
   }
+}
+
+/* Unified mobile type scale and row layout. Keep this block last so older overrides converge. */
+:root {
+  --sr-header-size: 21px;
+  --sr-subheader-size: 16px;
+  --sr-body-size: 14px;
+  --sr-input-size: 14px;
+  --sr-label-size: 12px;
+  --sr-meta-size: 12px;
+  --sr-action-size: 12px;
+}
+
+.mobile-app,
+.mobile-app p,
+.mobile-app span,
+.mobile-app small,
+.mobile-app dd,
+.mobile-app dt,
+.mobile-app li {
+  font-size: var(--sr-body-size);
+}
+
+.mobile-title h2 {
+  font-size: var(--sr-header-size);
+  line-height: 1.12;
+}
+
+.mobile-section h3,
+.summary-card h3,
+.sheet-header strong,
+.doctor-select-panel > strong,
+.today-dashboard header strong,
+.queue-insight span,
+.case-card h3,
+.fees-case-card header strong {
+  font-size: var(--sr-subheader-size);
+  line-height: 1.15;
+}
+
+.field span,
+.check span,
+.new-patient-sheet .field span,
+.assistant-basic-compact .field span,
+.quick-intake .field span,
+.doctor-select-panel .field span,
+.dose-controls span,
+.fees-detail-grid span {
+  font-size: var(--sr-label-size);
+  line-height: 1.1;
+}
+
+.field input,
+.field select,
+.field textarea,
+.new-patient-sheet .field input,
+.new-patient-sheet .field select,
+.assistant-basic-compact .field input,
+.assistant-basic-compact .field select,
+.quick-intake .field input,
+.quick-intake .field select,
+.doctor-select-panel .field select,
+.mobile-app button {
+  font-size: var(--sr-input-size);
+}
+
+.new-appointment-fit .field span,
+.new-appointment-fit .doctor-select-panel .field span {
+  font-size: var(--sr-label-size);
+}
+
+.new-appointment-fit .field input,
+.new-appointment-fit .field select,
+.new-appointment-fit .doctor-select-panel .field select {
+  font-size: var(--sr-input-size);
+}
+
+.appointment-row {
+  grid-template-columns: 34px 42px minmax(118px, 1fr) minmax(92px, max-content);
+}
+
+.appointment-main {
+  min-width: 0;
+}
+
+.appointment-name,
+.fees-queue-row strong,
+.row-main strong,
+.case-card strong,
+.data-row strong,
+.approval-card strong,
+.mapping-row strong {
+  font-size: var(--sr-body-size);
+  line-height: 1.15;
+}
+
+.appointment-name {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.appointment-row span,
+.appointment-row small,
+.fees-queue-row span,
+.fees-queue-row small,
+.row-main span,
+.row-detail span,
+.date-selector small,
+.today-status-tile span {
+  font-size: var(--sr-meta-size);
+}
+
+.appointment-send-cell {
+  gap: 4px;
+}
+
+.status,
+.appointment-send-cell .status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1.05;
+  padding: 4px 6px;
+  width: max-content;
+}
+
+.send-appointment-button,
+.mobile-menu-link,
+.assistant-bottom-dock button {
+  font-size: var(--sr-action-size);
 }

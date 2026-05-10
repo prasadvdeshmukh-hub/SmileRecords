@@ -210,6 +210,7 @@ app.post('/api/subscriptions/order', async (req, res) => {
   const user = findUserByEmail(req.body.email);
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (user.status !== 'Active') return res.status(403).json({ error: 'Admin approval is required before subscription payment.' });
+  if (!isSubscriptionBillable(user)) return res.status(400).json({ error: 'Monthly subscription is only required for Doctor users.' });
   ensureUserSubscription(user);
   if (!razorpay) {
     return res.status(503).json({ error: 'Razorpay payment gateway is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on Render.' });
@@ -256,6 +257,7 @@ app.post('/api/subscriptions/order', async (req, res) => {
 app.post('/api/subscriptions/verify', (req, res) => {
   const user = findUserByEmail(req.body.email);
   if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!isSubscriptionBillable(user)) return res.status(400).json({ error: 'Monthly subscription is only required for Doctor users.' });
   ensureUserSubscription(user);
   if (!RAZORPAY_KEY_SECRET) return res.status(503).json({ error: 'Razorpay secret is not configured on server.' });
   const orderId = String(req.body.razorpay_order_id || '').trim();
@@ -1912,6 +1914,7 @@ function requireActiveSubscriptionForAppApi(req, res, next) {
   if (!email) return next();
   const user = db.users.find((item) => normalizeEmail(item.email) === email);
   if (!user || user.status !== 'Active') return res.status(401).json({ error: 'Active login is required.' });
+  if (!isSubscriptionBillable(user)) return next();
   const subscription = subscriptionStatus(user);
   if (!subscription.isUsable) {
     return res.status(402).json({ error: 'Subscription payment is required before using SmileRecords.' });
@@ -1999,13 +2002,37 @@ function publicSubscriptionConfig() {
     amountPaise: SUBSCRIPTION_AMOUNT * 100,
     currency: SUBSCRIPTION_CURRENCY,
     trialDays: SUBSCRIPTION_TRIAL_DAYS,
+    billableRole: 'Doctor',
     configured: Boolean(razorpay),
     keyId: RAZORPAY_KEY_ID
   };
 }
 
+function isSubscriptionBillable(user) {
+  return user?.role === 'Doctor';
+}
+
+function exemptSubscriptionStatus(user) {
+  const subscription = {
+    provider: 'Internal',
+    plan: 'Not Required',
+    amount: 0,
+    currency: SUBSCRIPTION_CURRENCY,
+    trialStartedAt: '',
+    trialEndsAt: '',
+    paidUntil: '',
+    lastPaymentAt: '',
+    status: 'Not Required',
+    isUsable: true,
+    daysRemaining: null
+  };
+  if (user) user.subscription = subscription;
+  return subscription;
+}
+
 function ensureUserSubscription(user) {
   if (!user || user.status !== 'Active') return null;
+  if (!isSubscriptionBillable(user)) return exemptSubscriptionStatus(user);
   const nowIso = new Date().toISOString();
   const createdAt = user.approvedAt || user.createdAt || nowIso;
   const subscription = {
@@ -2026,6 +2053,7 @@ function ensureUserSubscription(user) {
 }
 
 function updateSubscriptionState(user) {
+  if (!isSubscriptionBillable(user)) return exemptSubscriptionStatus(user);
   const subscription = user.subscription || {};
   const paidUntil = timestampValue(subscription.paidUntil);
   const trialEndsAt = timestampValue(subscription.trialEndsAt);
@@ -2065,7 +2093,7 @@ function activatePaidSubscription(user, payment) {
 }
 
 function buildSubscriptionOverview() {
-  const users = (db.users || []).filter((user) => user.status === 'Active');
+  const users = (db.users || []).filter((user) => user.status === 'Active' && isSubscriptionBillable(user));
   const rows = users.map((user) => {
     const subscription = subscriptionStatus(user);
     return {
@@ -2079,9 +2107,10 @@ function buildSubscriptionOverview() {
       subscription
     };
   });
-  const payments = (db.subscriptionPayments || []).filter((payment) => payment.status === 'Paid');
+  const doctorUserIds = new Set(users.map((user) => user.id));
+  const payments = (db.subscriptionPayments || []).filter((payment) => payment.status === 'Paid' && doctorUserIds.has(payment.userId));
   const totalCollected = payments.reduce((sum, payment) => sum + toAmount(payment.amount), 0);
-  const billableUsers = rows.filter((user) => user.role !== 'Viewer').length;
+  const billableUsers = rows.length;
   const recentCutoff = Date.now() - (7 * 86400000);
   return {
     config: publicSubscriptionConfig(),

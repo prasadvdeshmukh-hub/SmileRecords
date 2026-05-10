@@ -59,6 +59,7 @@ const PROFILE_COPY = {
 };
 
 function isSubscriptionUsable(user) {
+  if (user?.role !== 'Doctor') return true;
   const subscription = user?.subscription;
   if (!subscription) return false;
   const now = Date.now();
@@ -165,6 +166,14 @@ function broadcastClinicRefresh() {
   window.dispatchEvent(new Event('smile-records-fees-change'));
 }
 
+function focusPageTop(behavior = 'auto') {
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, left: 0, behavior });
+    document.querySelector('.mobile-content')?.scrollTo?.({ top: 0, left: 0, behavior });
+    document.querySelector('.mobile-page')?.scrollIntoView?.({ block: 'start', behavior });
+  });
+}
+
 function apiHeaders(extra = {}) {
   const user = getStoredUser();
   return {
@@ -227,7 +236,7 @@ async function apiPost(path, body, method = 'POST') {
     }
   }
   if (typeof window !== 'undefined') {
-    window.setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 0);
+    window.setTimeout(() => focusPageTop('smooth'), 0);
   }
   return data;
 }
@@ -310,8 +319,8 @@ function App() {
 function ScrollToTop() {
   const location = useLocation();
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [location.pathname]);
+    focusPageTop();
+  }, [location.pathname, location.search]);
   return null;
 }
 
@@ -469,7 +478,11 @@ function SubscriptionGate() {
   const navigate = useNavigate();
   const subscription = data?.subscription || user?.subscription || {};
   const config = data?.config || {};
-  const isUsable = isSubscriptionUsable({ subscription });
+  const isUsable = isSubscriptionUsable({ ...user, subscription });
+
+  useEffect(() => {
+    if (user?.role && user.role !== 'Doctor') navigate(roleHome(user.role), { replace: true });
+  }, [user?.role]);
 
   useEffect(() => {
     if (data?.user) {
@@ -524,9 +537,9 @@ function SubscriptionGate() {
           <img src="/smile-records-login.png" alt="Smile Records" className="login-logo" />
         </div>
         <div className="login-copy">
-          <p className="eyebrow">Subscription access</p>
-          <h1>SmileRecords Monthly Plan</h1>
-          <p>First month is free. From the next month, subscription is Rs. 999 paid in advance before app access continues.</p>
+          <p className="eyebrow">Doctor subscription access</p>
+          <h1>SmileRecords Doctor Monthly Plan</h1>
+          <p>Subscription is only for Doctor users. First month is free, then Rs. 999 paid in advance before doctor access continues.</p>
         </div>
         {message && <div className="notice warning-notice">{message}</div>}
         {error && <div className="notice warning-notice">Unable to load subscription: {error.message}</div>}
@@ -637,6 +650,7 @@ function MobileShell({ role }) {
     setNotificationOpen(false);
     setRefresh((value) => value + 1);
     navigate(notificationTarget(item));
+    focusPageTop();
   };
   const menuItems = isDoctor
     ? [
@@ -665,7 +679,10 @@ function MobileShell({ role }) {
           <button
             className="mobile-logo-button"
             type="button"
-            onClick={() => navigate(PROFILE_COPY[role].home)}
+            onClick={() => {
+              navigate(PROFILE_COPY[role].home);
+              focusPageTop();
+            }}
             aria-label="Go to home"
           >
             <img src="/smile-records-header.png" alt="Smile Records" className="mobile-header-logo" />
@@ -726,6 +743,7 @@ const MobileProfileMenu = React.forwardRef(function MobileProfileMenu({ role, ta
           onClick={() => {
             navigate(item.to);
             onClose();
+            focusPageTop();
           }}
         >
           <item.icon size={17} />
@@ -895,8 +913,14 @@ function AssistantIntake() {
 
   useEffect(() => {
     const refreshQueue = () => setRefresh((value) => value + 1);
-    const openIntake = () => setMode('new');
-    const showAppointments = () => setMode('appointments');
+    const openIntake = () => {
+      setMode('new');
+      focusPageTop();
+    };
+    const showAppointments = () => {
+      setMode('appointments');
+      focusPageTop();
+    };
     window.addEventListener('smile-records-refresh', refreshQueue);
     window.addEventListener('smile-records-queue-change', refreshQueue);
     window.addEventListener('smile-records-appointments-change', refreshQueue);
@@ -912,7 +936,7 @@ function AssistantIntake() {
   }, []);
 
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    focusPageTop('smooth');
   }, [mode]);
 
   const submitPatient = async (event) => {
@@ -1049,14 +1073,14 @@ function AssistantIntake() {
   return (
     <MobilePage
       title={mode === 'new' ? 'New Appointment' : <span className="assistant-appointments-title">Appointments</span>}
-      subtitle={mode === 'new' ? 'Add patient details and submit to doctor.' : ''}
+      subtitle=""
       action={mode === 'appointments'
         ? <DatePickerControl value={selectedDate} onChange={setSelectedDate} />
         : <button className="page-close-button" type="button" onClick={() => setMode('appointments')}>Close</button>}
     >
       {message && <div className="notice">{message}</div>}
       {mode === 'new' ? (
-        <form className="new-patient-sheet" onSubmit={submitPatient} ref={intakeFormRef}>
+        <form className="new-patient-sheet new-appointment-fit" onSubmit={submitPatient} ref={intakeFormRef}>
           {doctorOptions.length > 0 && (
             <div className="doctor-select-panel">
               <strong>Select Doctor</strong>
@@ -1082,9 +1106,9 @@ function AssistantIntake() {
             <>
           <div className="sheet-header">
             <strong>Patient Details</strong>
-            <button type="button" onClick={() => setMode('appointments')}>Close</button>
           </div>
           <Input name="mobile" label="Mobile" controlledValue={patientDraft.mobile} required onBlur={handleMobileBlur} onChange={updatePatientDraft('mobile')} />
+          <Input name="name" label="Name" controlledValue={patientDraft.name} onChange={updatePatientDraft('name')} required />
           {lookupPatients.length > 0 && mobileDecision && (
             <div className="returning-patient-note duplicate-check">
               <strong>{mobileDecision === 'use-existing' ? 'Existing patient selected' : 'New patient record selected'}</strong>
@@ -1099,14 +1123,13 @@ function AssistantIntake() {
               </div>
             </div>
           )}
-          <Input name="name" label="Name" controlledValue={patientDraft.name} onChange={updatePatientDraft('name')} required />
           <Input name="age" label="Age" controlledValue={patientDraft.age} onChange={updatePatientDraft('age')} required />
           <SelectInput name="gender" label="Gender" controlledValue={patientDraft.gender} onChange={updatePatientDraft('gender')} options={GENDER_OPTIONS} required />
-          <Input name="address" label="Address" controlledValue={patientDraft.address} onChange={updatePatientDraft('address')} wide required />
+          <Input name="address" label="Address" controlledValue={patientDraft.address} onChange={updatePatientDraft('address')} required />
           <Input name="chiefComplaint" label="Complaint" controlledValue={patientDraft.chiefComplaint} onChange={updatePatientDraft('chiefComplaint')} required />
-          <TimeSlotSelect name="appointmentTime" label="Time" bookedTimes={bookedTimes} required />
           <Input name="toothNumber" label="Tooth" controlledValue={patientDraft.toothNumber} onChange={updatePatientDraft('toothNumber')} />
           <Input name="medicalFlags" label="Flags" controlledValue={patientDraft.medicalFlags} onChange={updatePatientDraft('medicalFlags')} placeholder="BP, allergy" />
+          <TimeSlotSelect name="appointmentTime" label="Time" bookedTimes={bookedTimes} required />
           <input type="hidden" name="hospitalId" value={activeHospitalId} />
           <input type="hidden" name="appointmentDate" value={selectedDate} />
           <input type="hidden" name="assistantId" value={currentUser?.id || ''} />
@@ -2290,13 +2313,14 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
         onClick={() => {
           setActiveTab('home');
           navigate('/assistant/intake');
+          focusPageTop();
           setTimeout(() => window.dispatchEvent(new Event('smile-records-show-appointments')), 0);
         }}
       >
         <Home size={18} />
         <span>Home</span>
       </button>
-      <button className={activeTab === 'fees' ? 'active' : ''} type="button" onClick={() => { setActiveTab('fees'); navigate('/assistant/fees'); }}>
+      <button className={activeTab === 'fees' ? 'active' : ''} type="button" onClick={() => { setActiveTab('fees'); navigate('/assistant/fees'); focusPageTop(); }}>
         <ReceiptIndianRupee size={18} />
         {feesPendingCount > 0 && <span className="dock-tab-badge">{feesPendingCount}</span>}
         <span>Fees</span>
@@ -2307,6 +2331,7 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
         onClick={() => {
           setActiveTab('new');
           navigate('/assistant/intake');
+          focusPageTop();
           setTimeout(() => window.dispatchEvent(new Event('smile-records-open-intake')), 0);
         }}
       >
@@ -2322,12 +2347,12 @@ function DoctorBottomDock({ tabs = [] }) {
   const location = useLocation();
   return (
     <div className="assistant-bottom-dock doctor-bottom-dock">
-      <button className={location.pathname === '/doctor/queue' ? 'active' : ''} type="button" onClick={() => navigate('/doctor/queue')}>
+      <button className={location.pathname === '/doctor/queue' ? 'active' : ''} type="button" onClick={() => { navigate('/doctor/queue'); focusPageTop(); }}>
         <Home size={18} />
         <span>Home</span>
       </button>
       {tabs.map((tab) => (
-        <button className={location.pathname === tab.to ? 'active' : ''} type="button" key={tab.to} onClick={() => navigate(tab.to)}>
+        <button className={location.pathname === tab.to ? 'active' : ''} type="button" key={tab.to} onClick={() => { navigate(tab.to); focusPageTop(); }}>
           <tab.icon size={18} />
           {tab.badge > 0 && <span className="dock-tab-badge">{tab.badge}</span>}
           <span>{tab.label}</span>
@@ -3447,17 +3472,17 @@ function SubscriptionAdminDashboard() {
   const { data, loading, error } = useApi('/subscriptions/overview');
   const metrics = [
     { label: 'Amount Collected', value: formatCurrency(data?.totalCollected), hint: 'Verified Razorpay payments' },
-    { label: 'Projected Monthly', value: formatCurrency(data?.projectedMonthly), hint: `${data?.billableUsers || 0} billable users` },
-    { label: 'Active Subscriptions', value: data?.activeSubscriptions || 0, hint: 'Paid in advance' },
-    { label: 'Trial Users', value: data?.trialUsers || 0, hint: 'First month free' },
-    { label: 'Expired Users', value: data?.expiredUsers || 0, hint: 'Payment required' },
-    { label: 'Active On App', value: data?.activeOnApp || 0, hint: 'Logged in last 7 days' },
-    { label: 'Users Not Using App', value: data?.notUsingApp || 0, hint: 'No login in last 7 days' },
+    { label: 'Projected Monthly', value: formatCurrency(data?.projectedMonthly), hint: `${data?.billableUsers || 0} doctor users` },
+    { label: 'Active Doctor Subs', value: data?.activeSubscriptions || 0, hint: 'Paid in advance' },
+    { label: 'Trial Doctors', value: data?.trialUsers || 0, hint: 'First month free' },
+    { label: 'Expired Doctors', value: data?.expiredUsers || 0, hint: 'Payment required' },
+    { label: 'Active Doctors On App', value: data?.activeOnApp || 0, hint: 'Logged in last 7 days' },
+    { label: 'Doctors Not Using App', value: data?.notUsingApp || 0, hint: 'No login in last 7 days' },
     { label: 'Monthly Price', value: formatCurrency(data?.config?.amount || 999), hint: 'Advance payment' }
   ];
 
   return (
-    <Page title="Subscriptions" eyebrow="Razorpay billing">
+    <Page title="Doctor Subscriptions" eyebrow="Razorpay billing">
       {error && <div className="notice warning-notice">Unable to load subscriptions: {error.message}</div>}
       <div className="metric-grid">
         {(loading ? Array.from({ length: 8 }) : metrics).map((metric, index) => (
@@ -3469,7 +3494,7 @@ function SubscriptionAdminDashboard() {
         ))}
       </div>
       <div className="two-column">
-        <Panel title="User Subscription Status" icon={Users}>
+        <Panel title="Doctor Subscription Status" icon={Users}>
           <div className="data-list">
             {(data?.users || []).map((user) => (
               <div className="data-row subscription-admin-row" key={user.id}>
@@ -3479,7 +3504,7 @@ function SubscriptionAdminDashboard() {
                 <Status value={user.subscription?.status || 'Expired'} />
               </div>
             ))}
-            {!loading && !(data?.users || []).length && <p className="muted">No approved users found.</p>}
+            {!loading && !(data?.users || []).length && <p className="muted">No approved doctors found.</p>}
           </div>
         </Panel>
         <Panel title="Recent Razorpay Payments" icon={CreditCard}>
