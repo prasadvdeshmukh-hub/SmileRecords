@@ -89,6 +89,24 @@ Use the same Firebase variables locally if you want local and Render to use the 
 
 That file is ignored by git so local test data does not get committed.
 
+### Razorpay Subscription Setup
+
+Add these environment variables in Render to enable subscription payments:
+
+```text
+RAZORPAY_KEY_ID=<your-razorpay-key-id>
+RAZORPAY_KEY_SECRET=<your-razorpay-key-secret>
+```
+
+Optional billing settings:
+
+```text
+SUBSCRIPTION_MONTHLY_AMOUNT=999
+SUBSCRIPTION_TRIAL_DAYS=30
+```
+
+Every approved user receives the first month free. After the trial ends, SmileRecords requires a verified Razorpay payment of Rs. 999 in advance before the user can continue into Assistant, Doctor, or Admin views. Payment access is granted only after backend signature verification.
+
 ### Reset and Smoke Test Safety
 
 Never run smoke tests against the shared Firestore document. The smoke test resets data by design, so start the API with isolated JSON-file storage:

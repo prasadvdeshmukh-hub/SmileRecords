@@ -20,6 +20,7 @@
     "firebase-admin": "^13.9.0",
     "lucide-react": "^0.561.0",
     "multer": "^2.1.1",
+    "razorpay": "^2.9.6",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-router-dom": "^7.10.1",

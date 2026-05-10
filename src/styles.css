@@ -334,6 +334,57 @@ td span {
   width: auto;
 }
 
+.subscription-auth-page {
+  align-items: center;
+}
+
+.subscription-panel {
+  max-width: 420px;
+  text-align: left;
+}
+
+.subscription-logo-shell {
+  min-height: 122px;
+}
+
+.subscription-logo-shell .login-logo {
+  max-height: 112px;
+}
+
+.subscription-status-card {
+  background: #f8fbff;
+  border: 1px solid #dce8f2;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px;
+}
+
+.subscription-status-card div {
+  display: grid;
+  gap: 2px;
+}
+
+.subscription-status-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.subscription-status-card strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.compact-note {
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 0;
+  text-align: center;
+}
+
 .login-copy {
   display: grid;
   gap: 5px;
@@ -738,12 +789,12 @@ td span {
 
 .profile-welcome strong {
   color: var(--ink);
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .profile-welcome span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 2px;
 }
 
@@ -804,10 +855,52 @@ td span {
 }
 
 .mobile-title h2 {
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 750;
   letter-spacing: 0;
   margin: 0 0 5px;
+}
+
+.mobile-notification-panel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 8px;
+  max-width: min(310px, calc(100vw - 24px));
+  padding: 12px;
+  position: absolute;
+  right: 8px;
+  top: calc(100% - 4px);
+  z-index: 35;
+}
+
+.mobile-notification-panel strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.mobile-notification-panel article {
+  background: #f8fbff;
+  border: 1px solid #e5eef7;
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+}
+
+.mobile-notification-panel span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.mobile-notification-panel small,
+.mobile-notification-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
 }
 
 .mobile-title p {
@@ -910,6 +1003,7 @@ td span {
 .mobile-form {
   display: grid;
   gap: 14px;
+  padding-bottom: 82px;
 }
 
 .mobile-section,
@@ -1279,7 +1373,7 @@ td span {
 .dose-controls {
   display: grid;
   gap: 6px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(118px, .9fr);
 }
 
 .dose-controls label {
@@ -1304,12 +1398,13 @@ td span {
 }
 
 .dose-time-control {
+  grid-column: 4;
   justify-self: end;
   width: 100%;
 }
 
 .dose-suggestion-control {
-  grid-column: 1 / -1;
+  grid-column: 1 / 4;
 }
 
 @media (max-width: 520px) {
@@ -1617,6 +1712,36 @@ td span {
 .prescription-preview ul {
   margin: 0;
   padding-left: 18px;
+}
+
+.prescription-preview-list {
+  display: grid;
+  gap: 5px;
+}
+
+.prescription-preview-row {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #f2dfaa;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 7px;
+}
+
+.prescription-preview-row span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 0;
+}
+
+.prescription-preview-row b {
+  color: var(--primary-strong);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .print-button {
@@ -2146,7 +2271,7 @@ button.date-selector {
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 900;
   justify-content: space-between;
   padding: 0 2px;
@@ -2162,7 +2287,7 @@ button.date-selector {
   cursor: grab;
   display: grid;
   gap: 7px;
-  grid-template-columns: 38px 44px minmax(0, 1fr) minmax(128px, auto);
+  grid-template-columns: 38px 44px minmax(0, 1fr) auto;
   min-height: 44px;
   padding: 6px 7px;
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
@@ -2303,16 +2428,16 @@ button.date-selector {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
-  min-width: 128px;
+  min-width: 0;
 }
 
 .appointment-send-cell .status {
   font-size: 10px;
   line-height: 1.05;
-  max-width: 78px;
+  max-width: none;
   padding: 4px 7px;
   text-align: center;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .primary-line {
@@ -2624,7 +2749,7 @@ button.date-selector {
   top: 5px;
 }
 
-.assistant-bottom-dock button:last-child {
+.assistant-bottom-dock button.active {
   background: var(--primary);
   border-color: var(--primary);
   color: #ffffff;
@@ -2646,7 +2771,7 @@ button.date-selector {
   color: var(--primary-strong);
 }
 
-.doctor-bottom-dock button:first-child {
+.doctor-bottom-dock button.active {
   background: var(--primary);
   border-color: var(--primary);
   color: #ffffff;
@@ -2711,6 +2836,12 @@ button.date-selector {
   color: var(--muted);
   font-size: 10px;
   font-weight: 900;
+}
+
+.fees-payment-line {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .doctor-wise-fees {
@@ -3646,6 +3777,22 @@ td span {
   color: #08715f;
 }
 
+.status.trial,
+.status.checking {
+  background: #eaf7fb;
+  color: var(--primary-strong);
+}
+
+.status.active {
+  background: var(--mint-soft);
+  color: #08715f;
+}
+
+.status.expired {
+  background: #fff1f0;
+  color: var(--danger);
+}
+
 .status.denied,
 .status.rejected {
   background: #fff1f0;
@@ -3721,7 +3868,7 @@ td span {
 
 /* Typography consistency pass: increases text clarity without changing control or panel dimensions. */
 .mobile-title h2 {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
   line-height: 1.14;
 }
@@ -3836,7 +3983,7 @@ td span {
 }
 
 .mobile-title h2 {
-  font-size: 23px;
+  font-size: 22px;
   font-weight: 850;
 }
 
@@ -3845,7 +3992,7 @@ td span {
 .sheet-header strong,
 .doctor-select-panel > strong,
 .today-dashboard header strong {
-  font-size: 17px;
+  font-size: 19px;
 }
 
 .mobile-app p,
@@ -3861,7 +4008,7 @@ td span {
 .new-patient-sheet .field select,
 .assistant-basic-compact .field input,
 .assistant-basic-compact .field select {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .field span,
@@ -3871,7 +4018,7 @@ td span {
 .quick-intake .field span,
 .doctor-select-panel .field span,
 .dose-controls span {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .appointment-name,
@@ -3880,7 +4027,7 @@ td span {
 .approval-card strong,
 .mapping-row strong,
 .fees-queue-row strong {
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .status,
@@ -3889,11 +4036,11 @@ td span {
 .date-selector small,
 .mobile-menu-link,
 .assistant-bottom-dock button {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .today-status-tile strong {
-  font-size: 19px;
+  font-size: 20px;
 }
 
 .complete-visit-button {
@@ -4176,7 +4323,7 @@ td span {
   }
 
   .appointment-row {
-    grid-template-columns: 32px 39px minmax(0, 1fr) minmax(118px, auto);
+    grid-template-columns: 32px 39px minmax(0, 1fr) auto;
     gap: 5px;
     padding: 6px;
   }

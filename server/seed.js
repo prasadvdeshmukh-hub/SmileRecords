@@ -222,6 +222,7 @@ export const seed = {
     { id: 'A-2', action: 'DOCTOR_SUBMIT_CASE', actor: 'Dr. Meera Rao', entity: 'CASE-0002', description: 'Diagnosis, prescription, tests, next visit saved', timestamp: '2026-05-07T09:10:00.000Z' },
     { id: 'A-3', action: 'ASSISTANT_CLOSE_CASE', actor: 'Rahul More', entity: 'CASE-0003', description: 'Fees and reports completed', timestamp: '2026-05-06T10:55:00.000Z' }
   ],
+  subscriptionPayments: [],
   feeReconciliations: [],
   notifications: []
 };

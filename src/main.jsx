@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronRight,
   ClipboardList,
+  CreditCard,
   Database,
   FilePlus2,
   FileSearch,
@@ -55,6 +56,15 @@ const PROFILE_COPY = {
   admin: { name: 'Admin', home: '/admin', greeting: 'Management dashboard is ready' }
 };
 
+function isSubscriptionUsable(user) {
+  const subscription = user?.subscription;
+  if (!subscription) return false;
+  const now = Date.now();
+  const paidUntil = Date.parse(subscription.paidUntil || '');
+  const trialEndsAt = Date.parse(subscription.trialEndsAt || '');
+  return (Number.isFinite(paidUntil) && paidUntil >= now) || (Number.isFinite(trialEndsAt) && trialEndsAt >= now);
+}
+
 function todayDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -100,13 +110,21 @@ function broadcastClinicRefresh() {
   window.dispatchEvent(new Event('smile-records-fees-change'));
 }
 
+function apiHeaders(extra = {}) {
+  const user = getStoredUser();
+  return {
+    ...(user?.email ? { 'X-User-Email': user.email } : {}),
+    ...extra
+  };
+}
+
 function useApi(path, refreshKey = 0) {
   const [state, setState] = useState({ loading: true, data: null, error: null });
 
   useEffect(() => {
     let active = true;
     setState({ loading: true, data: null, error: null });
-    fetch(apiUrl(path))
+    fetch(apiUrl(path), { headers: apiHeaders() })
       .then((response) => {
         if (!response.ok) throw new Error(`API ${response.status}`);
         return response.json();
@@ -126,7 +144,7 @@ async function apiPost(path, body, method = 'POST') {
   try {
     response = await fetch(apiUrl(path), {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body)
     });
   } catch {
@@ -146,14 +164,39 @@ async function apiPost(path, body, method = 'POST') {
     error.status = response.status;
     throw error;
   }
-  return response.json();
+  const data = await response.json();
+  if (typeof window !== 'undefined') {
+    window.setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 0);
+  }
+  return data;
+}
+
+function loadRazorpayCheckout() {
+  if (window.Razorpay) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-razorpay-checkout="true"]');
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true });
+      existing.addEventListener('error', () => reject(new Error('Unable to load Razorpay Checkout. Check network connection.')), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.dataset.razorpayCheckout = 'true';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Unable to load Razorpay Checkout. Check network connection.'));
+    document.body.appendChild(script);
+  });
 }
 
 function App() {
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/subscription" element={<RequireSession><SubscriptionGate /></RequireSession>} />
         <Route path="/pending" element={<PendingApproval />} />
         <Route path="/" element={<Navigate to="/login" replace />} />
 
@@ -193,6 +236,7 @@ function App() {
           <Route path="tests" element={<TestMasterAdmin />} />
           <Route path="templates" element={<AdminListing title="Prescription Forms" endpoint="/templates" icon={NotebookTabs} />} />
           <Route path="analytics" element={<Analytics />} />
+          <Route path="subscriptions" element={<SubscriptionAdminDashboard />} />
           <Route path="audit" element={<AuditLogs />} />
           <Route path="settings" element={<AdminSettings />} />
         </Route>
@@ -201,10 +245,25 @@ function App() {
   );
 }
 
+function ScrollToTop() {
+  const location = useLocation();
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [location.pathname]);
+  return null;
+}
+
 function RequireAuth({ allowedRoles, children }) {
   const user = getStoredUser();
   if (!user || user.status !== 'Active') return <Navigate to="/login" replace />;
+  if (!isSubscriptionUsable(user)) return <Navigate to="/subscription" replace />;
   if (!allowedRoles.includes(user.role)) return <Navigate to={roleHome(user.role)} replace />;
+  return children;
+}
+
+function RequireSession({ children }) {
+  const user = getStoredUser();
+  if (!user || user.status !== 'Active') return <Navigate to="/login" replace />;
   return children;
 }
 
@@ -224,7 +283,7 @@ function Login() {
     try {
       const result = await apiPost('/auth/login', { email: loginEmail, provider: 'Google' });
       localStorage.setItem(SESSION_KEY, JSON.stringify(result.user));
-      navigate(roleHome(result.user.role));
+      navigate(isSubscriptionUsable(result.user) ? roleHome(result.user.role) : '/subscription');
     } catch (error) {
       setMessage(error.message);
       if (error.status === 404 || error.status === 403) setMode('request');
@@ -339,6 +398,100 @@ function PendingApproval() {
   );
 }
 
+function SubscriptionGate() {
+  const storedUser = getStoredUser();
+  const [user, setUser] = useState(storedUser);
+  const [message, setMessage] = useState('');
+  const [paying, setPaying] = useState(false);
+  const { data, loading, error } = useApi(`/subscriptions/status?email=${encodeURIComponent(storedUser?.email || '')}`, user?.subscription?.lastPaymentAt || '');
+  const navigate = useNavigate();
+  const subscription = data?.subscription || user?.subscription || {};
+  const config = data?.config || {};
+  const isUsable = isSubscriptionUsable({ subscription });
+
+  useEffect(() => {
+    if (data?.user) {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(data.user));
+      setUser(data.user);
+    }
+  }, [data?.user?.subscription?.status, data?.user?.subscription?.paidUntil]);
+
+  const logout = () => {
+    localStorage.removeItem(SESSION_KEY);
+    navigate('/login');
+  };
+
+  const paySubscription = async () => {
+    setMessage('');
+    setPaying(true);
+    try {
+      const orderPayload = await apiPost('/subscriptions/order', { email: user.email });
+      await loadRazorpayCheckout();
+      const checkout = new window.Razorpay({
+        key: orderPayload.keyId,
+        amount: orderPayload.order.amount,
+        currency: orderPayload.order.currency,
+        name: 'SmileRecords',
+        description: 'Monthly subscription - Rs. 999 in advance',
+        order_id: orderPayload.order.id,
+        prefill: { name: user.name, email: user.email },
+        theme: { color: '#0f6cbd' },
+        handler: async (response) => {
+          const verified = await apiPost('/subscriptions/verify', { ...response, email: user.email });
+          localStorage.setItem(SESSION_KEY, JSON.stringify(verified.user));
+          setUser(verified.user);
+          setMessage('Subscription payment verified. Access is active.');
+          navigate(roleHome(verified.user.role));
+        },
+        modal: {
+          ondismiss: () => setMessage('Payment was not completed. Subscription access remains locked after free trial expiry.')
+        }
+      });
+      checkout.open();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  return (
+    <div className="auth-page subscription-auth-page">
+      <div className="auth-panel subscription-panel">
+        <div className="login-logo-shell subscription-logo-shell">
+          <img src="/smile-records-login.png" alt="Smile Records" className="login-logo" />
+        </div>
+        <div className="login-copy">
+          <p className="eyebrow">Subscription access</p>
+          <h1>SmileRecords Monthly Plan</h1>
+          <p>First month is free. From the next month, subscription is Rs. 999 paid in advance before app access continues.</p>
+        </div>
+        {message && <div className="notice warning-notice">{message}</div>}
+        {error && <div className="notice warning-notice">Unable to load subscription: {error.message}</div>}
+        <div className="subscription-status-card">
+          <div><span>User</span><strong>{displayUserName(user)}</strong></div>
+          <div><span>Role</span><strong>{user?.role || '-'}</strong></div>
+          <div><span>Status</span><Status value={subscription.status || (loading ? 'Checking' : 'Expired')} /></div>
+          <div><span>Trial ends</span><strong>{formatDateOnly(subscription.trialEndsAt)}</strong></div>
+          <div><span>Paid until</span><strong>{formatDateOnly(subscription.paidUntil)}</strong></div>
+          <div><span>Monthly fee</span><strong>{formatCurrency(config.amount || 999)}</strong></div>
+        </div>
+        {isUsable ? (
+          <button className="primary-button" type="button" onClick={() => navigate(roleHome(user.role))}>
+            <CheckCircle2 size={18} />Continue to app
+          </button>
+        ) : (
+          <button className="primary-button" type="button" onClick={paySubscription} disabled={paying}>
+            <CreditCard size={18} />{paying ? 'Opening Razorpay...' : 'Pay Rs. 999 and activate'}
+          </button>
+        )}
+        {!config.configured && <p className="muted compact-note">Razorpay keys are not configured on this server yet. Add keys on Render before live payments.</p>}
+        <button className="secondary-button" type="button" onClick={logout}><LogOut size={17} />Logout</button>
+      </div>
+    </div>
+  );
+}
+
 function MobileShell({ role }) {
   const isDoctor = role === 'doctor';
   const currentUser = getStoredUser();
@@ -352,7 +505,10 @@ function MobileShell({ role }) {
   const activeQueueCount = isDoctor ? (data?.cases?.length ?? 0) : feesPendingCount;
   const queueCount = activeQueueCount + ((notificationData?.notifications || []).filter((item) => item.status !== 'Read').length);
   const navigate = useNavigate();
+  const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const notifications = (notificationData?.notifications || []).filter((item) => item.status !== 'Read');
   useEffect(() => {
     const refreshShell = () => setRefresh((value) => value + 1);
     window.addEventListener('smile-records-refresh', refreshShell);
@@ -402,7 +558,7 @@ function MobileShell({ role }) {
           </button>
         </div>
         <div className="mobile-header-actions">
-          <button className="icon-button notification-button" aria-label="Notifications">
+          <button className="icon-button notification-button" type="button" aria-label="Notifications" onClick={() => setNotificationOpen((value) => !value)}>
             <Bell size={18} />
             {queueCount > 0 && <span className="notification-count">{queueCount}</span>}
           </button>
@@ -414,6 +570,17 @@ function MobileShell({ role }) {
           </button>
         </div>
         {menuOpen && <MobileProfileMenu role={role} tabs={menuItems} onClose={() => setMenuOpen(false)} onLogout={logout} />}
+        {notificationOpen && (
+          <div className="mobile-notification-panel">
+            <strong>Notifications</strong>
+            {notifications.length ? notifications.map((item) => (
+              <article key={item.id}>
+                <span>{item.title}</span>
+                <small>{item.message}</small>
+              </article>
+            )) : <p>No unread notifications.</p>}
+          </div>
+        )}
       </header>
       <main className="mobile-content">
         <ProfileWelcome role={role} />
@@ -539,6 +706,10 @@ function AssistantIntake() {
     };
   }, []);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [mode]);
+
   const submitPatient = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -612,7 +783,7 @@ function AssistantIntake() {
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/patients/lookup?mobile=${encodeURIComponent(mobile)}&hospitalId=${encodeURIComponent(activeHospitalId)}`));
+      const response = await fetch(apiUrl(`/patients/lookup?mobile=${encodeURIComponent(mobile)}&hospitalId=${encodeURIComponent(activeHospitalId)}`), { headers: apiHeaders() });
       const payload = await response.json();
       const matches = payload.patients || (payload.patient ? [payload.patient] : []);
       setLookupPatients(matches);
@@ -645,7 +816,7 @@ function AssistantIntake() {
 
   const useExistingPatient = async (patient) => {
     try {
-      const response = await fetch(apiUrl(`/patients/${patient.id}`));
+      const response = await fetch(apiUrl(`/patients/${patient.id}`), { headers: apiHeaders() });
       const payload = await response.json();
       const fullPatient = { ...patient, ...(payload.patient || {}) };
       setReturningPatient(fullPatient);
@@ -672,7 +843,7 @@ function AssistantIntake() {
 
   return (
     <MobilePage
-      title={mode === 'new' ? 'New Patient' : 'Appointments'}
+      title={mode === 'new' ? 'New Appointment' : 'Appointments'}
       subtitle={mode === 'new' ? 'Add patient details and submit to doctor.' : ''}
       action={mode === 'appointments'
         ? <DatePickerControl value={selectedDate} onChange={setSelectedDate} />
@@ -871,7 +1042,7 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
   const tiles = [
     { label: 'All', status: 'all', value: scopedAppointments.length },
     { label: 'Scheduled', status: 'scheduled', value: counts.scheduled || 0 },
-    { label: 'Doctor Queue', status: 'doctor_queue', value: counts.doctor_queue || 0 },
+    { label: "Doctor's Queue", status: 'doctor_queue', value: counts.doctor_queue || 0 },
     { label: 'Fees Collection', status: 'doctor_done', value: counts.doctor_done || 0 },
     { label: 'Closed', status: 'complete', value: counts.complete || 0 },
     { label: 'Cancelled', status: 'cancelled', value: counts.cancelled || 0 }
@@ -980,7 +1151,7 @@ function FeesDashboard({ data, active, onChange }) {
       {tiles.map((tile) => (
         <button className={active === tile.key ? 'active' : ''} key={tile.key} type="button" onClick={() => onChange(tile.key)}>
           <strong>{formatCurrency(tile.amount)}</strong>
-          <span>{tile.label} | {tile.count} patient(s)</span>
+          <span>{tile.label} | {tile.count}</span>
         </button>
       ))}
     </section>
@@ -1028,12 +1199,13 @@ function FeesWorkflowList({ loading, error, cases, mode = 'ready' }) {
           <div className="appointment-number">{index + 1}</div>
           <div className="appointment-main">
             <strong className="appointment-name">{item.patient.name}</strong>
-            <span>{item.patient.mobile} | {mode === 'paid' ? `${item.closure?.paymentMode} ${formatCurrency(item.closure?.feesCollected)}` : (item.doctor?.diagnosis || item.patient.chiefComplaint || 'Fees pending')}</span>
+            <span>{item.patient.mobile}</span>
+            {mode === 'paid' && <small className="fees-payment-line">{item.closure?.paymentMode || 'Payment'} - {formatCurrency(item.closure?.feesCollected)}</small>}
           </div>
           <div className="appointment-send-cell">
             <Status value={mode === 'ready' ? 'Fees Pending' : 'Fees Collected'} />
             <span className="send-appointment-button">
-              {mode === 'ready' ? 'Fees' : 'Paid'}
+              {mode === 'ready' ? 'Open' : 'Paid'}
             </span>
           </div>
         </NavLink>
@@ -1455,7 +1627,7 @@ function DoctorQueue() {
   const doctorId = tab === 'my' ? currentUser?.id : '';
   const mappedScope = tab === 'overall' ? currentUser?.email : '';
   return (
-    <MobilePage title="Doctor Queue" subtitle="Appointments sent by assistant for consultation." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
+    <MobilePage title="My Queue" subtitle="Appointments sent by assistant for consultation." action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       <div className="doctor-tabs">
         <button className={tab === 'my' ? 'active' : ''} type="button" onClick={() => setTab('my')}>My Queue</button>
         <button className={tab === 'overall' ? 'active' : ''} type="button" onClick={() => setTab('overall')}>Overall Queue</button>
@@ -1594,8 +1766,20 @@ function DoctorCase() {
 }
 
 function MobileAnalytics({ role }) {
-  const { data: dashboard } = useApi('/dashboard');
-  const { data: analytics } = useApi('/analytics');
+  const [refresh, setRefresh] = useState(0);
+  const { data: dashboard } = useApi('/dashboard', refresh);
+  const { data: analytics } = useApi('/analytics', refresh);
+  useEffect(() => {
+    const refreshDashboard = () => setRefresh((value) => value + 1);
+    window.addEventListener('smile-records-refresh', refreshDashboard);
+    window.addEventListener('smile-records-queue-change', refreshDashboard);
+    window.addEventListener('smile-records-fees-change', refreshDashboard);
+    return () => {
+      window.removeEventListener('smile-records-refresh', refreshDashboard);
+      window.removeEventListener('smile-records-queue-change', refreshDashboard);
+      window.removeEventListener('smile-records-fees-change', refreshDashboard);
+    };
+  }, []);
   const metricValue = (label) => dashboard?.metrics?.find((item) => item.label === label)?.value || 0;
   const assistantCards = [
     { label: 'Patients', value: metricValue('Total Patients') },
@@ -1722,7 +1906,25 @@ function QueueCommandCenter({ compact }) {
 
 function AssistantBottomDock({ feesPendingCount = 0 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [message, setMessage] = useState('');
+  const [activeTab, setActiveTab] = useState(location.pathname.includes('/assistant/fees') ? 'fees' : 'home');
+
+  useEffect(() => {
+    if (location.pathname.includes('/assistant/fees')) setActiveTab('fees');
+    else if (!location.pathname.includes('/assistant/intake')) setActiveTab('');
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const setNew = () => setActiveTab('new');
+    const setHome = () => setActiveTab('home');
+    window.addEventListener('smile-records-open-intake', setNew);
+    window.addEventListener('smile-records-show-appointments', setHome);
+    return () => {
+      window.removeEventListener('smile-records-open-intake', setNew);
+      window.removeEventListener('smile-records-show-appointments', setHome);
+    };
+  }, []);
 
   const run = async (path, success) => {
     try {
@@ -1740,8 +1942,10 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
     <div className="assistant-bottom-dock">
       {message && <span className="dock-toast">{message}</span>}
       <button
+        className={activeTab === 'home' ? 'active' : ''}
         type="button"
         onClick={() => {
+          setActiveTab('home');
           navigate('/assistant/intake');
           setTimeout(() => window.dispatchEvent(new Event('smile-records-show-appointments')), 0);
         }}
@@ -1749,14 +1953,16 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
         <Home size={18} />
         <span>Home</span>
       </button>
-      <button type="button" onClick={() => navigate('/assistant/fees')}>
+      <button className={activeTab === 'fees' ? 'active' : ''} type="button" onClick={() => { setActiveTab('fees'); navigate('/assistant/fees'); }}>
         <ReceiptIndianRupee size={18} />
         {feesPendingCount > 0 && <span className="dock-tab-badge">{feesPendingCount}</span>}
         <span>Fees</span>
       </button>
       <button
+        className={activeTab === 'new' ? 'active' : ''}
         type="button"
         onClick={() => {
+          setActiveTab('new');
           navigate('/assistant/intake');
           setTimeout(() => window.dispatchEvent(new Event('smile-records-open-intake')), 0);
         }}
@@ -1770,14 +1976,15 @@ function AssistantBottomDock({ feesPendingCount = 0 }) {
 
 function DoctorBottomDock({ tabs = [] }) {
   const navigate = useNavigate();
+  const location = useLocation();
   return (
     <div className="assistant-bottom-dock doctor-bottom-dock">
-      <button type="button" onClick={() => navigate('/doctor/queue')}>
+      <button className={location.pathname === '/doctor/queue' ? 'active' : ''} type="button" onClick={() => navigate('/doctor/queue')}>
         <Home size={18} />
         <span>Home</span>
       </button>
       {tabs.map((tab) => (
-        <button type="button" key={tab.to} onClick={() => navigate(tab.to)}>
+        <button className={location.pathname === tab.to ? 'active' : ''} type="button" key={tab.to} onClick={() => navigate(tab.to)}>
           <tab.icon size={18} />
           <span>{tab.label}</span>
         </button>
@@ -1943,7 +2150,7 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
       <div className="appointment-list">
         {loading && <p className="muted">Loading appointments...</p>}
         {message && <p className="queue-message">{message}</p>}
-        {renderRows(openAppointments, 'Open Cases')}
+        {renderRows(openAppointments, role === 'assistant' ? 'Scheduled' : 'Open Cases')}
         {renderRows(feesPendingAppointments, 'Fees Collection', openAppointments.length)}
         {renderRows(closedAppointments, 'Closed Cases', openAppointments.length + feesPendingAppointments.length)}
         {renderRows(cancelledAppointments, 'Cancelled Cases', openAppointments.length + feesPendingAppointments.length + closedAppointments.length)}
@@ -1984,9 +2191,6 @@ function AppointmentRow({ item, index, role, dragIndex, setDragIndex, moveAppoin
       onDrop={() => !locked && moveAppointment(dragIndex, index)}
       onDragEnd={() => setDragIndex(null)}
       onDoubleClick={() => editAppointment(item)}
-      onClick={() => {
-        if (role === 'doctor' && item.caseId && !isCancelledAppointment(item)) navigate(`/doctor/case/${item.caseId}`);
-      }}
     >
       <div className="appointment-number">{index + 1}</div>
       <time>{item.time}</time>
@@ -2019,11 +2223,7 @@ function AppointmentAction({ item, role, onAction }) {
       );
     }
     if (item.status === 'doctor_done' || item.status === 'complete') {
-      return (
-        <button className="send-appointment-button muted-action" type="button" onClick={(event) => onAction(event, item, 'recall-to-waiting', 'Move this appointment back to Waiting Queue?')} draggable={false}>
-          Not Done
-        </button>
-      );
+      return null;
     }
   }
 
@@ -2088,6 +2288,7 @@ function AdminShell() {
     { to: '/admin/tests', label: 'X-rays & Tests', icon: FileSearch },
     { to: '/admin/templates', label: 'Prescription Forms', icon: NotebookTabs },
     { to: '/admin/analytics', label: 'Dashboard Data', icon: Gauge },
+    { to: '/admin/subscriptions', label: 'Subscriptions', icon: CreditCard },
     { to: '/admin/audit', label: 'Audit Logs', icon: FileSearch },
     { to: '/admin/settings', label: 'Settings', icon: Settings }
   ];
@@ -2683,14 +2884,16 @@ function MedicineSelector({ prescriptionItems, setPrescriptionItems }) {
 
   const addMedicine = (medicine) => {
     if (!prescriptionItems.some((item) => item.id === medicine.id)) {
-      setPrescriptionItems([...prescriptionItems, {
+      const nextMedicine = {
         ...medicine,
         selectedStrength: firstMasterOption(medicine.strength || medicine.description),
         selectedDosageForm: firstMasterOption(medicine.dosageForm),
         selectedUse: firstMasterOption(medicine.commonUse || medicine.condition),
         dosePattern: medicine.dosePattern || '1 - 1 - 1',
-        doseSuggestion: medicine.doseSuggestion || medicine.description || ''
-      }]);
+        doseSuggestion: ''
+      };
+      nextMedicine.doseSuggestion = medicine.doseSuggestion || buildMedicineSuggestion(nextMedicine);
+      setPrescriptionItems([...prescriptionItems, nextMedicine]);
     }
     setQuery('');
   };
@@ -2729,6 +2932,10 @@ function MedicineSelector({ prescriptionItems, setPrescriptionItems }) {
 }
 
 function SelectionBox({ items, onRemove, onDoseChange, empty }) {
+  const updateMedicine = (item, updates) => {
+    const next = { ...item, ...updates };
+    onDoseChange(item.id, { ...updates, doseSuggestion: buildMedicineSuggestion(next) });
+  };
   return (
     <div className="selection-box">
       {!items.length && <p>{empty}</p>}
@@ -2742,31 +2949,31 @@ function SelectionBox({ items, onRemove, onDoseChange, empty }) {
             <div className="dose-controls">
               <label>
                 <span>Strength</span>
-                <select value={item.selectedStrength || firstMasterOption(item.strength || item.description)} onChange={(event) => onDoseChange(item.id, { selectedStrength: event.target.value })}>
+                <select value={item.selectedStrength || firstMasterOption(item.strength || item.description)} onChange={(event) => updateMedicine(item, { selectedStrength: event.target.value })}>
                   {masterOptions(item.strength || item.description).map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
               <label>
                 <span>Form</span>
-                <select value={item.selectedDosageForm || firstMasterOption(item.dosageForm)} onChange={(event) => onDoseChange(item.id, { selectedDosageForm: event.target.value })}>
+                <select value={item.selectedDosageForm || firstMasterOption(item.dosageForm)} onChange={(event) => updateMedicine(item, { selectedDosageForm: event.target.value })}>
                   {masterOptions(item.dosageForm).map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
               <label>
                 <span>Use</span>
-                <select value={item.selectedUse || firstMasterOption(item.commonUse || item.condition)} onChange={(event) => onDoseChange(item.id, { selectedUse: event.target.value })}>
+                <select value={item.selectedUse || firstMasterOption(item.commonUse || item.condition)} onChange={(event) => updateMedicine(item, { selectedUse: event.target.value })}>
                   {masterOptions(item.commonUse || item.condition).map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
+              </label>
+              <label className="dose-suggestion-control">
+                <span>Suggestion</span>
+                <input value={item.doseSuggestion || buildMedicineSuggestion(item)} onChange={(event) => onDoseChange(item.id, { doseSuggestion: event.target.value })} placeholder="Auto suggestion" maxLength={160} />
               </label>
               <label className="dose-time-control">
                 <span>Dose time</span>
                 <select value={item.dosePattern || '1 - 1 - 1'} onChange={(event) => onDoseChange(item.id, { dosePattern: event.target.value })}>
                   {DOSE_PATTERNS.map((pattern) => <option key={pattern} value={pattern}>{pattern}</option>)}
                 </select>
-              </label>
-              <label className="dose-suggestion-control">
-                <span>Suggestion</span>
-                <input value={item.doseSuggestion || ''} onChange={(event) => onDoseChange(item.id, { doseSuggestion: event.target.value })} placeholder="After food, 5 days" maxLength={120} />
               </label>
             </div>
           )}
@@ -2781,9 +2988,14 @@ function PrescriptionPreview({ item, selectedTests, prescriptionItems }) {
     <div className="prescription-preview">
       <strong>Prescription Preview</strong>
       <p>{item.patient.name} - {item.patient.mobile}</p>
-      <ul>
-        {prescriptionItems.map((medicine) => <li key={medicine.id}>{formatMedicineDoseLine(medicine)}</li>)}
-      </ul>
+      <div className="prescription-preview-list">
+        {prescriptionItems.map((medicine) => (
+          <div className="prescription-preview-row" key={medicine.id}>
+            <span>{formatMedicineDoseText(medicine)}</span>
+            <b>{medicine.dosePattern || '1 - 1 - 1'}</b>
+          </div>
+        ))}
+      </div>
       {!!selectedTests.length && <p><b>Suggested X-rays/tests:</b> {selectedTests.map((test) => test.name).join(', ')}</p>}
     </div>
   );
@@ -2792,8 +3004,13 @@ function PrescriptionPreview({ item, selectedTests, prescriptionItems }) {
 function printPrescription(item) {
   const tests = item.doctor?.testsRequested || [];
   const medicines = item.doctor?.prescriptionItems?.length
-    ? item.doctor.prescriptionItems.map((medicine) => `<li>${formatMedicineDoseLine(medicine)}</li>`).join('')
-    : `<li>${item.doctor?.prescription || 'Prescription not yet added'}</li>`;
+    ? item.doctor.prescriptionItems.map((medicine) => `
+        <div class="medicine-row">
+          <span>${formatMedicineDoseText(medicine)}</span>
+          <b>${medicine.dosePattern || '1 - 1 - 1'}</b>
+        </div>
+      `).join('')
+    : `<div class="medicine-row"><span>${item.doctor?.prescription || 'Prescription not yet added'}</span><b>-</b></div>`;
   const testText = tests.length ? tests.join(', ') : 'No X-ray/test suggested';
   const html = `
     <html>
@@ -2804,7 +3021,9 @@ function printPrescription(item) {
           h1 { color: #0f6cbd; margin-bottom: 4px; }
           .meta { color: #667085; margin-bottom: 22px; }
           section { border-top: 1px solid #dce8f2; padding-top: 14px; margin-top: 14px; }
-          li { margin: 8px 0; }
+          .medicine-list { display: grid; gap: 8px; margin-top: 10px; }
+          .medicine-row { align-items: start; display: grid; gap: 14px; grid-template-columns: 1fr 120px; }
+          .medicine-row b { text-align: right; }
         </style>
       </head>
       <body>
@@ -2820,7 +3039,7 @@ function printPrescription(item) {
         </section>
         <section>
           <strong>Medicines</strong>
-          <ul>${medicines}</ul>
+          <div class="medicine-list">${medicines}</div>
         </section>
         <section>
           <strong>X-rays / Tests Suggested</strong>
@@ -2854,6 +3073,62 @@ function Analytics() {
             <div className="chart-labels">{chart.points.map((point) => <small key={point.label}>{point.label}</small>)}</div>
           </article>
         ))}
+      </div>
+    </Page>
+  );
+}
+
+function SubscriptionAdminDashboard() {
+  const { data, loading, error } = useApi('/subscriptions/overview');
+  const metrics = [
+    { label: 'Amount Collected', value: formatCurrency(data?.totalCollected), hint: 'Verified Razorpay payments' },
+    { label: 'Projected Monthly', value: formatCurrency(data?.projectedMonthly), hint: `${data?.billableUsers || 0} billable users` },
+    { label: 'Active Subscriptions', value: data?.activeSubscriptions || 0, hint: 'Paid in advance' },
+    { label: 'Trial Users', value: data?.trialUsers || 0, hint: 'First month free' },
+    { label: 'Expired Users', value: data?.expiredUsers || 0, hint: 'Payment required' },
+    { label: 'Active On App', value: data?.activeOnApp || 0, hint: 'Logged in last 7 days' },
+    { label: 'Users Not Using App', value: data?.notUsingApp || 0, hint: 'No login in last 7 days' },
+    { label: 'Monthly Price', value: formatCurrency(data?.config?.amount || 999), hint: 'Advance payment' }
+  ];
+
+  return (
+    <Page title="Subscriptions" eyebrow="Razorpay billing">
+      {error && <div className="notice warning-notice">Unable to load subscriptions: {error.message}</div>}
+      <div className="metric-grid">
+        {(loading ? Array.from({ length: 8 }) : metrics).map((metric, index) => (
+          <article className="metric-card" key={metric?.label || index}>
+            <span>{metric?.label || 'Loading'}</span>
+            <strong>{metric?.value ?? '-'}</strong>
+            <small>{metric?.hint || 'Syncing'}</small>
+          </article>
+        ))}
+      </div>
+      <div className="two-column">
+        <Panel title="User Subscription Status" icon={Users}>
+          <div className="data-list">
+            {(data?.users || []).map((user) => (
+              <div className="data-row subscription-admin-row" key={user.id}>
+                <strong>{user.name}</strong>
+                <span>{user.email} | {user.role} | {user.hospitalName || 'No hospital'}</span>
+                <small>Last login: {formatDateTime(user.lastLoginAt)} | Paid until: {formatDateOnly(user.subscription?.paidUntil)} | Trial ends: {formatDateOnly(user.subscription?.trialEndsAt)}</small>
+                <Status value={user.subscription?.status || 'Expired'} />
+              </div>
+            ))}
+            {!loading && !(data?.users || []).length && <p className="muted">No approved users found.</p>}
+          </div>
+        </Panel>
+        <Panel title="Recent Razorpay Payments" icon={CreditCard}>
+          <div className="data-list">
+            {(data?.payments || []).map((payment) => (
+              <div className="data-row" key={payment.id}>
+                <strong>{payment.userName || payment.email}</strong>
+                <span>{formatCurrency(payment.amount)} | {payment.razorpayPaymentId || payment.razorpayOrderId}</span>
+                <small>{formatDateTime(payment.paidAt)} | {payment.provider}</small>
+              </div>
+            ))}
+            {!loading && !(data?.payments || []).length && <p className="muted">No verified subscription payments yet.</p>}
+          </div>
+        </Panel>
       </div>
     </Page>
   );
@@ -3283,7 +3558,7 @@ function appointmentStatusLabel(item) {
 function caseStatusLabel(item) {
   if (item.status === 'cancelled') return 'Cancelled';
   if (item.status === 'completed' || item.visitStatus === 'visit_complete') return 'Closed';
-  if (item.status === 'doctor_queue') return 'Open - Doctor Queue';
+  if (item.status === 'doctor_queue') return "Open - Doctor's Queue";
   if (item.status === 'assistant_closure' && item.visitStatus === 'doctor_done') return 'Open - Fees Pending';
   if (item.status === 'assistant_closure') return 'Fees Collected';
   if (item.status === 'assistant_intake') return 'Open - Scheduled';
@@ -3319,14 +3594,27 @@ function formatPrescriptionLine(doctor = {}) {
 }
 
 function formatMedicineDoseLine(medicine = {}) {
-  const dose = medicine.dosePattern ? ` [${medicine.dosePattern}]` : '';
+  const dose = medicine.dosePattern ? ` | ${medicine.dosePattern}` : '';
+  return `${formatMedicineDoseText(medicine)}${dose}`;
+}
+
+function formatMedicineDoseText(medicine = {}) {
   const masterDetails = [
     medicine.selectedStrength,
     medicine.selectedDosageForm,
     medicine.selectedUse
   ].filter((value) => value && value !== '-').join(' - ');
-  const suggestion = medicine.doseSuggestion || medicine.description || medicine.generic || '';
-  return `${medicine.name || 'Medicine'}${masterDetails ? ` - ${masterDetails}` : ''}${dose}${suggestion ? `: ${suggestion}` : ''}`;
+  const suggestion = medicine.doseSuggestion || buildMedicineSuggestion(medicine) || medicine.description || medicine.generic || '';
+  const suggestionText = suggestion === masterDetails ? '' : suggestion;
+  return `${medicine.name || 'Medicine'}${masterDetails ? ` - ${masterDetails}` : ''}${suggestionText ? `: ${suggestionText}` : ''}`;
+}
+
+function buildMedicineSuggestion(medicine = {}) {
+  return [
+    medicine.selectedStrength,
+    medicine.selectedDosageForm,
+    medicine.selectedUse
+  ].filter((value) => value && value !== '-').join(' - ') || medicine.description || medicine.generic || '';
 }
 
 function masterOptions(value = '') {
@@ -3344,6 +3632,11 @@ function firstMasterOption(value = '') {
 function formatDateTime(value) {
   if (!value) return '-';
   return new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatDateOnly(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleDateString('en-IN', { dateStyle: 'medium' });
 }
 
 function formatCurrency(value) {

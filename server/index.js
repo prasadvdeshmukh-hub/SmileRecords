@@ -4,9 +4,11 @@ import express from 'express';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import multer from 'multer';
+import crypto from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Razorpay from 'razorpay';
 import XLSX from 'xlsx';
 import { seed } from './seed.js';
 
@@ -16,12 +18,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = process.env.SMILE_RECORDS_DATA_FILE || join(__dirname, 'data', 'smile-records.local.json');
 const IS_DEPLOYED_RUNTIME = process.env.RENDER || process.env.NODE_ENV === 'production';
 const STORAGE_MODE = process.env.SMILE_RECORDS_STORAGE || '';
+const SUBSCRIPTION_AMOUNT = Number(process.env.SUBSCRIPTION_MONTHLY_AMOUNT || 999);
+const SUBSCRIPTION_CURRENCY = 'INR';
+const SUBSCRIPTION_TRIAL_DAYS = Number(process.env.SUBSCRIPTION_TRIAL_DAYS || 30);
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const razorpay = RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET
+  ? new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET })
+  : null;
 const storage = createStorage();
 let db = await loadDb();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 app.use(cors());
 app.use(express.json());
+app.use(requireActiveSubscriptionForAppApi);
 app.use(persistSuccessfulMutations);
 
 app.get('/api/health', (req, res) => {
@@ -51,6 +62,7 @@ app.get('/api/admin/export', (req, res) => {
 });
 
 app.get('/api/dashboard', (req, res) => {
+  const subscriptionOverview = buildSubscriptionOverview();
   res.json({
     metrics: [
       { label: 'Doctor Queue', value: countCases('doctor_queue'), hint: 'Waiting for analysis' },
@@ -60,6 +72,8 @@ app.get('/api/dashboard', (req, res) => {
       { label: 'Total Patients', value: db.patients.length, hint: 'Clinic records' },
       { label: 'Pending Approvals', value: db.users.filter((item) => item.status === 'Pending').length, hint: 'Admin action' },
       { label: 'Active Roles', value: db.roles.length, hint: 'RBAC enabled' },
+      { label: 'Subscription Collected', value: formatMoney(subscriptionOverview.totalCollected), hint: 'Verified Razorpay payments' },
+      { label: 'Monthly Projection', value: formatMoney(subscriptionOverview.projectedMonthly), hint: `${subscriptionOverview.billableUsers} approved users` },
       { label: 'Audit Events', value: db.audit.length, hint: 'Sensitive actions' }
     ]
   });
@@ -98,6 +112,9 @@ app.post('/api/auth/login', (req, res) => {
     log(isRejected ? 'LOGIN_DENIED_REJECTED_ACCESS' : 'LOGIN_DENIED_PENDING_APPROVAL', user.name || email, user.id, { req, outcome: 'Denied', module: 'Login', actorRole: user.role, description: `Login denied because access status is ${user.status}` });
     return res.status(403).json({ error: isRejected ? 'Access request was rejected by admin. Please contact admin or submit a new request.' : 'Access request is pending admin approval.' });
   }
+  user.lastLoginAt = new Date().toISOString();
+  user.loginCount = Number(user.loginCount || 0) + 1;
+  ensureUserSubscription(user);
   log('LOGIN_SUCCESS', user.name || email, user.id, { req, module: 'Login', actorRole: user.role, entityType: 'User', entityId: user.id });
   res.json({ user: withHospital(user) });
 });
@@ -127,6 +144,118 @@ app.post('/api/access-requests', (req, res) => {
   if (!existing) db.users.unshift(user);
   log('ACCESS_REQUEST_SUBMITTED', user.name, user.id, { req, module: 'Login Request', actorRole: requestedRole, entityType: 'User', entityId: user.id, description: `Access requested for ${requestedRole} at ${hospital.name}` });
   res.status(existing ? 200 : 201).json({ user });
+});
+
+app.get('/api/subscriptions/config', (req, res) => {
+  res.json({
+    keyId: RAZORPAY_KEY_ID,
+    configured: Boolean(razorpay),
+    amount: SUBSCRIPTION_AMOUNT,
+    amountPaise: SUBSCRIPTION_AMOUNT * 100,
+    currency: SUBSCRIPTION_CURRENCY,
+    trialDays: SUBSCRIPTION_TRIAL_DAYS
+  });
+});
+
+app.get('/api/subscriptions/status', (req, res) => {
+  const user = findUserByEmail(req.query.email);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  ensureUserSubscription(user);
+  res.json({ user: withHospital(user), subscription: subscriptionStatus(user), config: publicSubscriptionConfig() });
+});
+
+app.get('/api/subscriptions/overview', (req, res) => {
+  res.json(buildSubscriptionOverview());
+});
+
+app.post('/api/subscriptions/order', async (req, res) => {
+  const user = findUserByEmail(req.body.email);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (user.status !== 'Active') return res.status(403).json({ error: 'Admin approval is required before subscription payment.' });
+  ensureUserSubscription(user);
+  if (!razorpay) {
+    return res.status(503).json({ error: 'Razorpay payment gateway is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on Render.' });
+  }
+
+  const receipt = `smile_${user.id}_${Date.now()}`.slice(0, 40);
+  const order = await razorpay.orders.create({
+    amount: SUBSCRIPTION_AMOUNT * 100,
+    currency: SUBSCRIPTION_CURRENCY,
+    receipt,
+    notes: {
+      app: 'SmileRecords',
+      userId: user.id,
+      email: normalizeEmail(user.email),
+      plan: 'Monthly'
+    }
+  });
+  const pendingPayment = {
+    id: nextId('SUBPAY', (db.subscriptionPayments || []).length + 1),
+    userId: user.id,
+    userName: user.name,
+    email: normalizeEmail(user.email),
+    amount: SUBSCRIPTION_AMOUNT,
+    amountPaise: SUBSCRIPTION_AMOUNT * 100,
+    currency: SUBSCRIPTION_CURRENCY,
+    razorpayOrderId: order.id,
+    razorpayPaymentId: '',
+    status: 'Created',
+    provider: 'Razorpay',
+    createdAt: new Date().toISOString(),
+    paidAt: ''
+  };
+  db.subscriptionPayments.unshift(pendingPayment);
+  log('SUBSCRIPTION_ORDER_CREATED', user.name, pendingPayment.id, { req, module: 'Subscription', actorRole: user.role, entityType: 'SubscriptionPayment', entityId: pendingPayment.id });
+  res.status(201).json({
+    order,
+    payment: pendingPayment,
+    keyId: RAZORPAY_KEY_ID,
+    user: withHospital(user),
+    config: publicSubscriptionConfig()
+  });
+});
+
+app.post('/api/subscriptions/verify', (req, res) => {
+  const user = findUserByEmail(req.body.email);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  ensureUserSubscription(user);
+  if (!RAZORPAY_KEY_SECRET) return res.status(503).json({ error: 'Razorpay secret is not configured on server.' });
+  const orderId = String(req.body.razorpay_order_id || '').trim();
+  const paymentId = String(req.body.razorpay_payment_id || '').trim();
+  const signature = String(req.body.razorpay_signature || '').trim();
+  if (!orderId || !paymentId || !signature) return res.status(400).json({ error: 'Incomplete Razorpay payment response.' });
+
+  const expected = crypto
+    .createHmac('sha256', RAZORPAY_KEY_SECRET)
+    .update(`${orderId}|${paymentId}`)
+    .digest('hex');
+  if (expected !== signature) {
+    log('SUBSCRIPTION_PAYMENT_VERIFICATION_FAILED', user.name, user.id, { req, module: 'Subscription', actorRole: user.role, outcome: 'Denied', entityType: 'User', entityId: user.id });
+    return res.status(400).json({ error: 'Payment verification failed. Please retry or contact admin.' });
+  }
+
+  const payment = (db.subscriptionPayments || []).find((item) => item.razorpayOrderId === orderId) || {
+    id: nextId('SUBPAY', (db.subscriptionPayments || []).length + 1),
+    userId: user.id,
+    userName: user.name,
+    email: normalizeEmail(user.email),
+    amount: SUBSCRIPTION_AMOUNT,
+    amountPaise: SUBSCRIPTION_AMOUNT * 100,
+    currency: SUBSCRIPTION_CURRENCY,
+    provider: 'Razorpay',
+    createdAt: new Date().toISOString()
+  };
+  if (!db.subscriptionPayments.includes(payment)) db.subscriptionPayments.unshift(payment);
+  Object.assign(payment, {
+    razorpayOrderId: orderId,
+    razorpayPaymentId: paymentId,
+    razorpaySignature: signature,
+    status: 'Paid',
+    paidAt: new Date().toISOString()
+  });
+  activatePaidSubscription(user, payment);
+  log('SUBSCRIPTION_PAYMENT_VERIFIED', user.name, payment.id, { req, module: 'Subscription', actorRole: user.role, entityType: 'SubscriptionPayment', entityId: payment.id, description: `${user.name} paid ${formatMoney(SUBSCRIPTION_AMOUNT)} for SmileRecords monthly subscription` });
+  res.json({ ok: true, user: withHospital(user), subscription: subscriptionStatus(user), payment });
 });
 
 app.get('/api/queue', (req, res) => {
@@ -816,17 +945,19 @@ app.post('/api/doctor-assistant-mappings', (req, res) => {
 
 app.post('/api/users', (req, res) => {
   const user = createUser(req.body);
+  if (user.status === 'Active') ensureUserSubscription(user);
   db.users.unshift(user);
   log('ADMIN_ADD_USER', req.body.actor || 'Admin', user.email);
-  res.status(201).json({ user });
+  res.status(201).json({ user: withHospital(user) });
 });
 
 app.patch('/api/users/:id', (req, res) => {
   const user = db.users.find((item) => item.id === req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   Object.assign(user, pick(req.body, ['name', 'email', 'role', 'requestedRole', 'hospitalId', 'status', 'description']));
+  if (user.status === 'Active') ensureUserSubscription(user);
   log('ADMIN_UPDATE_USER', req.body.actor || 'Admin', user.id);
-  res.json({ user });
+  res.json({ user: withHospital(user) });
 });
 
 app.patch('/api/users/:id/approve', (req, res) => {
@@ -837,8 +968,9 @@ app.patch('/api/users/:id/approve', (req, res) => {
   user.role = role;
   user.status = 'Active';
   user.description = req.body.description || `Approved as ${role}`;
+  ensureUserSubscription(user);
   log('ADMIN_APPROVE_USER', req.body.actor || 'Admin', user.id, { req, module: 'User Approval', actorRole: 'Super Admin', entityType: 'User', entityId: user.id, description: `User approved as ${role}` });
-  res.json({ user });
+  res.json({ user: withHospital(user) });
 });
 
 app.patch('/api/users/:id/reject', (req, res) => {
@@ -1542,6 +1674,10 @@ function prepareDb(value) {
   merged.doctorAssistantMappings = merged.doctorAssistantMappings || [];
   merged.notifications = merged.notifications || [];
   merged.feeReconciliations = merged.feeReconciliations || [];
+  merged.subscriptionPayments = merged.subscriptionPayments || [];
+  for (const user of merged.users || []) {
+    if (user.status === 'Active') ensureUserSubscription(user);
+  }
   return merged;
 }
 
@@ -1616,6 +1752,26 @@ function persistSuccessfulMutations(req, res, next) {
   next();
 }
 
+function requireActiveSubscriptionForAppApi(req, res, next) {
+  const publicPrefixes = [
+    '/api/health',
+    '/api/auth',
+    '/api/access-requests',
+    '/api/hospitals',
+    '/api/subscriptions'
+  ];
+  if (!req.path.startsWith('/api') || publicPrefixes.some((prefix) => req.path.startsWith(prefix))) return next();
+  const email = normalizeEmail(req.headers['x-user-email']);
+  if (!email) return next();
+  const user = db.users.find((item) => normalizeEmail(item.email) === email);
+  if (!user || user.status !== 'Active') return res.status(401).json({ error: 'Active login is required.' });
+  const subscription = subscriptionStatus(user);
+  if (!subscription.isUsable) {
+    return res.status(402).json({ error: 'Subscription payment is required before using SmileRecords.' });
+  }
+  return next();
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -1684,6 +1840,133 @@ function nextHospitalCode(name) {
   return code;
 }
 
+function findUserByEmail(email) {
+  const normalized = normalizeEmail(email);
+  return db.users.find((user) => normalizeEmail(user.email) === normalized);
+}
+
+function publicSubscriptionConfig() {
+  return {
+    amount: SUBSCRIPTION_AMOUNT,
+    amountPaise: SUBSCRIPTION_AMOUNT * 100,
+    currency: SUBSCRIPTION_CURRENCY,
+    trialDays: SUBSCRIPTION_TRIAL_DAYS,
+    configured: Boolean(razorpay),
+    keyId: RAZORPAY_KEY_ID
+  };
+}
+
+function ensureUserSubscription(user) {
+  if (!user || user.status !== 'Active') return null;
+  const nowIso = new Date().toISOString();
+  const createdAt = user.approvedAt || user.createdAt || nowIso;
+  const subscription = {
+    provider: 'Razorpay',
+    plan: 'Monthly',
+    amount: SUBSCRIPTION_AMOUNT,
+    currency: SUBSCRIPTION_CURRENCY,
+    trialStartedAt: createdAt,
+    trialEndsAt: addDays(createdAt, SUBSCRIPTION_TRIAL_DAYS),
+    paidUntil: '',
+    lastPaymentAt: '',
+    status: 'Trial',
+    ...(user.subscription || {})
+  };
+  user.subscription = subscription;
+  updateSubscriptionState(user);
+  return user.subscription;
+}
+
+function updateSubscriptionState(user) {
+  const subscription = user.subscription || {};
+  const paidUntil = timestampValue(subscription.paidUntil);
+  const trialEndsAt = timestampValue(subscription.trialEndsAt);
+  const now = Date.now();
+  if (paidUntil >= now) subscription.status = 'Active';
+  else if (trialEndsAt >= now) subscription.status = 'Trial';
+  else subscription.status = 'Expired';
+  subscription.isUsable = ['Active', 'Trial'].includes(subscription.status);
+  subscription.daysRemaining = Math.max(0, Math.ceil((Math.max(paidUntil, trialEndsAt) - now) / 86400000));
+  user.subscription = subscription;
+  return subscription;
+}
+
+function subscriptionStatus(user) {
+  ensureUserSubscription(user);
+  return updateSubscriptionState(user);
+}
+
+function activatePaidSubscription(user, payment) {
+  const subscription = ensureUserSubscription(user);
+  const nowIso = new Date().toISOString();
+  const baseTimestamp = Math.max(
+    Date.now(),
+    timestampValue(subscription.paidUntil),
+    timestampValue(subscription.trialEndsAt)
+  );
+  subscription.status = 'Active';
+  subscription.isUsable = true;
+  subscription.lastPaymentAt = payment.paidAt || nowIso;
+  subscription.lastPaymentId = payment.id;
+  subscription.lastRazorpayPaymentId = payment.razorpayPaymentId;
+  subscription.paidUntil = addMonths(new Date(baseTimestamp).toISOString(), 1);
+  subscription.amount = SUBSCRIPTION_AMOUNT;
+  subscription.currency = SUBSCRIPTION_CURRENCY;
+  updateSubscriptionState(user);
+  return subscription;
+}
+
+function buildSubscriptionOverview() {
+  const users = (db.users || []).filter((user) => user.status === 'Active');
+  const rows = users.map((user) => {
+    const subscription = subscriptionStatus(user);
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      hospitalName: db.hospitals.find((hospital) => hospital.id === user.hospitalId)?.name || '',
+      lastLoginAt: user.lastLoginAt || '',
+      loginCount: user.loginCount || 0,
+      subscription
+    };
+  });
+  const payments = (db.subscriptionPayments || []).filter((payment) => payment.status === 'Paid');
+  const totalCollected = payments.reduce((sum, payment) => sum + toAmount(payment.amount), 0);
+  const billableUsers = rows.filter((user) => user.role !== 'Viewer').length;
+  const recentCutoff = Date.now() - (7 * 86400000);
+  return {
+    config: publicSubscriptionConfig(),
+    totalCollected,
+    projectedMonthly: billableUsers * SUBSCRIPTION_AMOUNT,
+    billableUsers,
+    activeSubscriptions: rows.filter((user) => user.subscription.status === 'Active').length,
+    trialUsers: rows.filter((user) => user.subscription.status === 'Trial').length,
+    expiredUsers: rows.filter((user) => user.subscription.status === 'Expired').length,
+    activeOnApp: rows.filter((user) => timestampValue(user.lastLoginAt) >= recentCutoff).length,
+    notUsingApp: rows.filter((user) => timestampValue(user.lastLoginAt) < recentCutoff).length,
+    users: rows,
+    payments: payments.slice(0, 25)
+  };
+}
+
+function addDays(value, days) {
+  const date = new Date(value || Date.now());
+  date.setDate(date.getDate() + Number(days || 0));
+  return date.toISOString();
+}
+
+function addMonths(value, months) {
+  const date = new Date(value || Date.now());
+  date.setMonth(date.getMonth() + Number(months || 0));
+  return date.toISOString();
+}
+
+function timestampValue(value) {
+  const time = Date.parse(value || '');
+  return Number.isFinite(time) ? time : 0;
+}
+
 function findDoctor(doctorId, doctorEmail) {
   return db.users.find((user) => (
     user.role === 'Doctor' &&
@@ -1716,9 +1999,11 @@ function getDoctorAssistantMapping(doctor) {
 
 function withHospital(user) {
   const hospital = db.hospitals.find((item) => item.id === user.hospitalId);
+  if (user.status === 'Active') ensureUserSubscription(user);
   return {
     ...user,
-    hospitalName: hospital?.name || ''
+    hospitalName: hospital?.name || '',
+    subscription: user.subscription ? subscriptionStatus(user) : user.subscription
   };
 }
 
