@@ -3493,6 +3493,82 @@ button.date-selector {
   grid-column: 1 / -1;
 }
 
+.optional-fees-panel {
+  background: #f8fbff;
+  border: 1px dashed #bdd7ee;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding: 7px;
+}
+
+.optional-fees-panel.wide {
+  grid-column: 1 / -1;
+}
+
+.optional-fees-panel > strong {
+  align-items: center;
+  color: var(--primary-strong);
+  display: flex;
+  font-size: 13px;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.optional-fees-panel > strong span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.optional-fees-panel .inline-fields {
+  gap: 6px;
+}
+
+.fee-entry-list {
+  display: grid;
+  gap: 8px;
+}
+
+.fee-entry-row {
+  background: #ffffff;
+  border: 1px solid #dce8f2;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 7px;
+}
+
+.fee-entry-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.fee-entry-header span {
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.icon-mini-button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #dce8f2;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.add-fee-button {
+  justify-content: center;
+  min-height: 34px;
+}
+
 .new-patient-sheet .field span {
   font-size: 11px;
 }

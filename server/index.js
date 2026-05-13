@@ -470,7 +470,7 @@ app.post('/api/cases', (req, res) => {
       intakeAt: new Date().toISOString()
     },
     doctor: {},
-    closure: {},
+    closure: normalizeFeeCollection(req.body, { required: false, requireUpiReceipt: true }),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -581,11 +581,60 @@ app.patch('/api/cases/:id/basic', (req, res) => {
     return res.status(400).json({ error: 'Enter a valid 10 digit mobile number starting with 6, 7, 8, or 9' });
   }
   item.patient = { ...item.patient, ...normalized };
+  let appointment = db.appointments.find((record) => record.caseId === item.id || record.queueNumber === item.queueNumber);
+  const requestedAppointmentTime = String(req.body.appointmentTime || '').trim();
+  const requestedAppointmentDate = normalizeDate(req.body.appointmentDate || '');
+  if (requestedAppointmentTime || requestedAppointmentDate) {
+    const nextAppointmentTime = requestedAppointmentTime || appointment?.time || item.patient.appointmentTime;
+    const nextAppointmentDate = requestedAppointmentDate || (appointment ? appointmentDate(appointment) : item.patient.appointmentDate || today());
+    if (!isValidAppointmentTime(nextAppointmentTime)) {
+      return res.status(400).json({ error: 'Appointment time must use a 15 minute slot between 09:00 and 18:00' });
+    }
+    const appointmentDoctorId = appointment?.doctorId || item.assignedDoctorId || '';
+    const slotTaken = db.appointments.some((record) => (
+      record.id !== appointment?.id
+      && isSlotBlockingAppointment(record)
+      && record.time === nextAppointmentTime
+      && appointmentDate(record) === nextAppointmentDate
+      && (record.doctorId || '') === appointmentDoctorId
+    ));
+    if (slotTaken) {
+      return res.status(409).json({ error: 'Appointment time is already allocated to another patient' });
+    }
+    if (!appointment) {
+      appointment = {
+        id: nextId('APT', db.appointments.length + 1),
+        caseId: item.id,
+        queueNumber: item.queueNumber,
+        date: nextAppointmentDate,
+        time: nextAppointmentTime,
+        patientName: item.patient.name,
+        type: item.patient.chiefComplaint || 'Consult',
+        status: item.status === 'doctor_queue' ? 'doctor_queue' : 'scheduled',
+        doctorId: appointmentDoctorId,
+        doctorName: item.assignedDoctorName || ''
+      };
+      db.appointments.push(appointment);
+    }
+    appointment.patientName = item.patient.name;
+    appointment.type = item.patient.chiefComplaint || appointment.type || 'Consult';
+    appointment.time = nextAppointmentTime;
+    appointment.date = nextAppointmentDate;
+    appointment.updatedAt = new Date().toISOString();
+    item.patient.appointmentTime = nextAppointmentTime;
+    item.patient.appointmentDate = nextAppointmentDate;
+  } else if (appointment) {
+    appointment.patientName = item.patient.name;
+    appointment.type = item.patient.chiefComplaint || appointment.type || 'Consult';
+    appointment.updatedAt = new Date().toISOString();
+  }
+  const fees = normalizeFeeCollection(req.body, { required: false, requireUpiReceipt: false });
+  if (fees.feesCollected) item.closure = { ...(item.closure || {}), ...fees };
   const patient = db.patients.find((record) => record.id === item.patientId);
   if (patient) Object.assign(patient, item.patient);
   item.updatedAt = new Date().toISOString();
   log('ASSISTANT_EDIT_PATIENT_BASIC', 'Assistant', item.id);
-  res.json({ case: item });
+  res.json({ case: enrichCase(item) });
 });
 
 app.patch('/api/cases/:id/doctor-submit', (req, res) => {
@@ -610,10 +659,11 @@ app.patch('/api/cases/:id/doctor-submit', (req, res) => {
     submittedBy: 'Doctor',
     submittedAt: new Date().toISOString()
   };
+  const feesAlreadyCollected = Boolean(item.closure?.feesCollected);
   item.status = 'assistant_closure';
-  item.visitStatus = 'doctor_done';
+  item.visitStatus = feesAlreadyCollected ? 'assistant_work_done' : 'doctor_done';
   const appointment = db.appointments.find((record) => record.queueNumber === item.queueNumber);
-  if (appointment) appointment.status = 'doctor_done';
+  if (appointment) appointment.status = feesAlreadyCollected ? 'fees_collected' : 'doctor_done';
   item.updatedAt = new Date().toISOString();
   item.patient.treatmentStatus = item.doctor.treatmentStatus;
   item.patient.nextFollowUp = item.doctor.nextVisitDate;
@@ -683,28 +733,22 @@ app.patch('/api/cases/:id/cancel-visit', (req, res) => {
 app.patch('/api/cases/:id/assistant-close', (req, res) => {
   const item = db.cases.find((caseItem) => caseItem.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Case not found' });
-  if (!canAssistantCollectFees(item)) {
-    return res.status(409).json({ error: 'Doctor has not completed analysis yet. Assistant cannot collect fees or close work.' });
+  const optionalBeforeDoctor = !canAssistantCollectFees(item) && ['assistant_intake', 'doctor_queue'].includes(item.status);
+  const updateAlreadyCollectedFees = canAssistantMarkComplete(item);
+  if (!canAssistantCollectFees(item) && !optionalBeforeDoctor && !updateAlreadyCollectedFees) {
+    return res.status(409).json({ error: 'Doctor has not completed analysis yet. Assistant can save optional fees, but cannot close work.' });
   }
   if (item.status === 'completed') {
     return res.status(409).json({ error: 'Visit is already complete.' });
   }
-  const paymentMode = ['Cash', 'UPI'].includes(req.body.paymentMode) ? req.body.paymentMode : '';
-  if (!paymentMode) return res.status(400).json({ error: 'Select payment mode Cash or UPI' });
-  if (paymentMode === 'UPI' && !req.body.receiptCapture) {
-    return res.status(400).json({ error: 'UPI payment requires receipt screenshot capture' });
+  const fees = normalizeFeeCollection(req.body, { required: true, requireUpiReceipt: !optionalBeforeDoctor });
+  item.closure = { ...(item.closure || {}), ...fees };
+  if (!item.closure.closedAt) item.closure.closedAt = new Date().toISOString();
+  if (!item.closure.closedBy) item.closure.closedBy = 'Assistant';
+  if (!optionalBeforeDoctor) {
+    item.status = 'assistant_closure';
+    item.visitStatus = 'assistant_work_done';
   }
-
-  item.closure = {
-    feesCollected: req.body.feesCollected || '',
-    paymentMode,
-    receiptCapture: req.body.receiptCapture || '',
-    assistantNotes: req.body.assistantNotes || '',
-    closedBy: 'Assistant',
-    closedAt: new Date().toISOString()
-  };
-  item.status = 'assistant_closure';
-  item.visitStatus = 'assistant_work_done';
   item.updatedAt = new Date().toISOString();
   item.patient.timeline.unshift({ id: `TL-${Date.now()}`, title: 'Assistant fees collection', date: today(), note: 'Fees and payment details updated' });
   log('ASSISTANT_CLOSE_CASE', 'Assistant', item.id);
@@ -1311,12 +1355,16 @@ function patientSummary(patient) {
 }
 
 function enrichCase(item) {
+  const appointment = db.appointments.find((record) => record.caseId === item.id || record.queueNumber === item.queueNumber);
   return {
     ...item,
     patient: {
       ...item.patient,
+      appointmentTime: item.patient?.appointmentTime || appointment?.time || '',
+      appointmentDate: item.patient?.appointmentDate || (appointment ? appointmentDate(appointment) : ''),
       historyDays: patientHistoryDays(item.patient)
-    }
+    },
+    appointment
   };
 }
 
@@ -1466,18 +1514,92 @@ function toAmount(value) {
 
 function buildFeesSummary(cases) {
   return cases.reduce((summary, item) => {
-    const amount = toAmount(item.closure?.feesCollected);
-    summary.totalAmount += amount;
+    const entries = closureFeeEntries(item.closure);
+    if (!entries.length) return summary;
+    summary.totalAmount += entries.reduce((sum, entry) => sum + toAmount(entry.amount || entry.feesCollected), 0);
     summary.totalCount += 1;
-    if (item.closure?.paymentMode === 'UPI') {
-      summary.upiAmount += amount;
-      summary.upiCount += 1;
-    } else {
-      summary.cashAmount += amount;
-      summary.cashCount += 1;
+    for (const entry of entries) {
+      const amount = toAmount(entry.amount || entry.feesCollected);
+      if (entry.paymentMode === 'UPI') {
+        summary.upiAmount += amount;
+        summary.upiCount += 1;
+      } else {
+        summary.cashAmount += amount;
+        summary.cashCount += 1;
+      }
     }
     return summary;
   }, { totalAmount: 0, cashAmount: 0, upiAmount: 0, totalCount: 0, cashCount: 0, upiCount: 0 });
+}
+
+function closureFeeEntries(closure = {}) {
+  if (Array.isArray(closure.feeEntries) && closure.feeEntries.length) {
+    return closure.feeEntries
+      .map((entry) => ({
+        amount: String(entry.amount || entry.feesCollected || '').trim(),
+        paymentMode: ['Cash', 'UPI'].includes(entry.paymentMode) ? entry.paymentMode : 'Cash',
+        receiptCapture: String(entry.receiptCapture || '').trim(),
+        assistantNotes: String(entry.assistantNotes || '').trim(),
+        collectedAt: entry.collectedAt || closure.closedAt || ''
+      }))
+      .filter((entry) => entry.amount);
+  }
+  if (!closure.feesCollected) return [];
+  return [{
+    amount: String(closure.feesCollected).trim(),
+    paymentMode: ['Cash', 'UPI'].includes(closure.paymentMode) ? closure.paymentMode : 'Cash',
+    receiptCapture: String(closure.receiptCapture || '').trim(),
+    assistantNotes: String(closure.assistantNotes || '').trim(),
+    collectedAt: closure.closedAt || ''
+  }];
+}
+
+function normalizeFeeCollection(source = {}, options = {}) {
+  const rawEntries = Array.isArray(source.feeEntries)
+    ? source.feeEntries
+    : (Array.isArray(source.closure?.feeEntries) ? source.closure.feeEntries : []);
+  const entries = rawEntries
+    .map((entry) => ({
+      amount: String(entry.amount || entry.feesCollected || '').trim(),
+      paymentMode: ['Cash', 'UPI'].includes(entry.paymentMode) ? entry.paymentMode : '',
+      receiptCapture: String(entry.receiptCapture || '').trim(),
+      assistantNotes: String(entry.assistantNotes || '').trim(),
+      collectedAt: entry.collectedAt || new Date().toISOString()
+    }))
+    .filter((entry) => entry.amount);
+  if (!entries.length && (source.feesCollected || source.closure?.feesCollected)) {
+    entries.push({
+      amount: String(source.feesCollected || source.closure?.feesCollected || '').trim(),
+      paymentMode: ['Cash', 'UPI'].includes(source.paymentMode || source.closure?.paymentMode)
+        ? (source.paymentMode || source.closure?.paymentMode)
+        : '',
+      receiptCapture: String(source.receiptCapture || source.closure?.receiptCapture || '').trim(),
+      assistantNotes: String(source.assistantNotes || source.closure?.assistantNotes || '').trim(),
+      collectedAt: source.closure?.closedAt || new Date().toISOString()
+    });
+  }
+  if (!entries.length) {
+    if (options.required) throwHttp(400, 'Fees collected amount is required');
+    return {};
+  }
+  for (const entry of entries) {
+    if (!entry.paymentMode) throwHttp(400, 'Select payment mode Cash or UPI');
+    if (entry.paymentMode === 'UPI' && options.requireUpiReceipt && !entry.receiptCapture) {
+      throwHttp(400, 'UPI payment requires receipt screenshot capture');
+    }
+  }
+  const existingClosedAt = source.closure?.closedAt || '';
+  const totalAmount = entries.reduce((sum, entry) => sum + toAmount(entry.amount), 0);
+  const modes = new Set(entries.map((entry) => entry.paymentMode));
+  return {
+    feeEntries: entries,
+    feesCollected: String(totalAmount),
+    paymentMode: modes.size === 1 ? entries[0].paymentMode : 'Mixed',
+    receiptCapture: entries.map((entry) => entry.receiptCapture).filter(Boolean).join(', '),
+    assistantNotes: entries.map((entry) => entry.assistantNotes).filter(Boolean).join(' | '),
+    closedBy: source.closure?.closedBy || 'Assistant',
+    closedAt: existingClosedAt || new Date().toISOString()
+  };
 }
 
 function buildDoctorFeeSummary(cases) {
@@ -1492,15 +1614,19 @@ function buildDoctorFeeSummary(cases) {
       });
     }
     const summary = grouped.get(key);
-    const amount = toAmount(item.closure?.feesCollected);
-    summary.totalAmount += amount;
+    const entries = closureFeeEntries(item.closure);
+    if (!entries.length) continue;
+    summary.totalAmount += entries.reduce((sum, entry) => sum + toAmount(entry.amount || entry.feesCollected), 0);
     summary.totalCount += 1;
-    if (item.closure?.paymentMode === 'UPI') {
-      summary.upiAmount += amount;
-      summary.upiCount += 1;
-    } else {
-      summary.cashAmount += amount;
-      summary.cashCount += 1;
+    for (const entry of entries) {
+      const amount = toAmount(entry.amount || entry.feesCollected);
+      if (entry.paymentMode === 'UPI') {
+        summary.upiAmount += amount;
+        summary.upiCount += 1;
+      } else {
+        summary.cashAmount += amount;
+        summary.cashCount += 1;
+      }
     }
   }
   return [...grouped.values()];
