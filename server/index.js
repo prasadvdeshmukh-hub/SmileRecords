@@ -405,6 +405,9 @@ app.post('/api/cases', (req, res) => {
   if (!String(patient.age || '').trim()) return res.status(400).json({ error: 'Patient age is required' });
   if (!String(patient.gender || '').trim()) return res.status(400).json({ error: 'Patient gender is required' });
   if (!String(patient.address || '').trim()) return res.status(400).json({ error: 'Patient address is required' });
+  if (patient.toothNumber && !isValidToothNumber(patient.toothNumber)) {
+    return res.status(400).json({ error: 'Tooth number must be between 1 and 32' });
+  }
   const appointmentTime = req.body.appointmentTime || patient.appointmentTime;
   const appointmentDay = req.body.appointmentDate || patient.appointmentDate || today();
   if (!isValidAppointmentTime(appointmentTime)) {
@@ -576,9 +579,14 @@ app.patch('/api/cases/:id/basic', (req, res) => {
     return res.status(409).json({ error: 'Case cannot be edited in current status' });
   }
 
-  const normalized = normalizePatient(req.body.patient || {});
+  const submittedPatient = req.body.patient || {};
+  const normalized = normalizePatient(submittedPatient);
+  if (!Object.prototype.hasOwnProperty.call(submittedPatient, 'city')) normalized.city = item.patient.city || '';
   if (normalized.mobile && !isValidMobile(normalized.mobile)) {
     return res.status(400).json({ error: 'Enter a valid 10 digit mobile number starting with 6, 7, 8, or 9' });
+  }
+  if (normalized.toothNumber && !isValidToothNumber(normalized.toothNumber)) {
+    return res.status(400).json({ error: 'Tooth number must be between 1 and 32' });
   }
   item.patient = { ...item.patient, ...normalized };
   let appointment = db.appointments.find((record) => record.caseId === item.id || record.queueNumber === item.queueNumber);
@@ -649,7 +657,7 @@ app.patch('/api/cases/:id/doctor-submit', (req, res) => {
   item.doctor = {
     diagnosis,
     treatmentPlan,
-    treatmentStatus: req.body.treatmentStatus || 'In Progress',
+    treatmentStatus: req.body.treatmentStatus || 'Pending',
     doctorNotes: limitText(req.body.doctorNotes),
     testsRequested: Array.isArray(req.body.testsRequested) ? req.body.testsRequested : [],
     prescriptionForm: limitText(req.body.prescriptionForm),
@@ -660,10 +668,11 @@ app.patch('/api/cases/:id/doctor-submit', (req, res) => {
     submittedAt: new Date().toISOString()
   };
   const feesAlreadyCollected = Boolean(item.closure?.feesCollected);
-  item.status = 'assistant_closure';
-  item.visitStatus = feesAlreadyCollected ? 'assistant_work_done' : 'doctor_done';
-  const appointment = db.appointments.find((record) => record.queueNumber === item.queueNumber);
-  if (appointment) appointment.status = feesAlreadyCollected ? 'fees_collected' : 'doctor_done';
+  item.status = feesAlreadyCollected ? 'completed' : 'assistant_closure';
+  item.visitStatus = feesAlreadyCollected ? 'visit_complete' : 'doctor_done';
+  if (feesAlreadyCollected && !item.completedAt) item.completedAt = new Date().toISOString();
+  const appointment = findCaseAppointment(item);
+  if (appointment) appointment.status = feesAlreadyCollected ? 'complete' : 'doctor_done';
   item.updatedAt = new Date().toISOString();
   item.patient.treatmentStatus = item.doctor.treatmentStatus;
   item.patient.nextFollowUp = item.doctor.nextVisitDate;
@@ -691,8 +700,7 @@ app.patch('/api/cases/:id/doctor-cancel', (req, res) => {
   item.visitStatus = 'cancelled_by_doctor';
   item.updatedAt = new Date().toISOString();
   item.patient.timeline.unshift({ id: `TL-${Date.now()}`, title: 'Doctor cancelled case', date: today(), note: req.body.reason || 'Cancelled by doctor' });
-  const appointment = db.appointments.find((record) => record.queueNumber === item.queueNumber);
-  if (appointment) appointment.status = 'cancelled';
+  releaseAppointmentSlot(item);
   log('DOCTOR_CANCEL_CASE', req.body.actor || 'Doctor', item.id);
   res.json({ case: item });
 });
@@ -709,7 +717,7 @@ app.patch('/api/cases/:id/visit-complete', (req, res) => {
   item.visitStatus = 'visit_complete';
   item.updatedAt = new Date().toISOString();
   item.patient.timeline.unshift({ id: `TL-${Date.now()}`, title: 'Visit complete', date: today(), note: 'Marked complete by clinic staff' });
-  const appointment = db.appointments.find((record) => record.queueNumber === item.queueNumber);
+  const appointment = findCaseAppointment(item);
   if (appointment) appointment.status = 'complete';
   log('MARK_VISIT_COMPLETE', actor, item.id);
   res.json({ case: item });
@@ -724,8 +732,7 @@ app.patch('/api/cases/:id/cancel-visit', (req, res) => {
   item.visitStatus = 'cancelled';
   item.updatedAt = new Date().toISOString();
   item.patient.timeline.unshift({ id: `TL-${Date.now()}`, title: 'Visit cancelled', date: today(), note: 'Cancelled by assistant before doctor completion' });
-  const appointment = db.appointments.find((record) => record.queueNumber === item.queueNumber);
-  if (appointment) appointment.status = 'cancelled';
+  releaseAppointmentSlot(item);
   log('CANCEL_VISIT', req.body.actor || 'Assistant', item.id);
   res.json({ case: item });
 });
@@ -918,6 +925,18 @@ app.patch('/api/notifications/read-all', (req, res) => {
     }
   }
   res.json({ updated });
+});
+
+app.patch('/api/notifications/clear-all', (req, res) => {
+  const email = normalizeEmail(req.body.email || req.headers['x-user-email']);
+  const user = db.users.find((item) => normalizeEmail(item.email) === email);
+  let removed = 0;
+  db.notifications = (db.notifications || []).filter((item) => {
+    const matches = item.userId === user?.id || normalizeEmail(item.email) === email || (!item.userId && !item.email);
+    if (matches) removed += 1;
+    return !matches;
+  });
+  res.json({ removed });
 });
 
 app.patch('/api/notifications/:id/read', (req, res) => {
@@ -1330,6 +1349,11 @@ function isValidMobile(value) {
   return /^[6-9]\d{9}$/.test(compactMobile(value));
 }
 
+function isValidToothNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 1 && number <= 32;
+}
+
 function compactMobile(value) {
   const digits = String(value || '').replace(/\D/g, '');
   return digits.length > 10 ? digits.slice(-10) : digits;
@@ -1700,6 +1724,20 @@ function isClosedAppointment(appointment) {
 
 function isSlotBlockingAppointment(appointment) {
   return !['cancelled'].includes(appointment.status);
+}
+
+function findCaseAppointment(item) {
+  return db.appointments.find((record) => record.caseId === item.id)
+    || db.appointments.find((record) => record.queueNumber === item.queueNumber);
+}
+
+function releaseAppointmentSlot(item) {
+  const appointment = findCaseAppointment(item);
+  if (!appointment) return null;
+  appointment.status = 'cancelled';
+  appointment.releasedAt = new Date().toISOString();
+  appointment.updatedAt = appointment.releasedAt;
+  return appointment;
 }
 
 function isCaseVisibleToDoctor(item, doctor) {

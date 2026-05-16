@@ -48,7 +48,7 @@ const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, ''
 const DRAFT_KEY = 'smileRecordsAssistantDrafts';
 const SESSION_KEY = 'smileRecordsCurrentUser';
 const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'Prefer not to say'];
-const TREATMENT_STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed', 'Follow-up Required', 'Referred'];
+const TREATMENT_STATUS_OPTIONS = ['Pending', 'Completed', 'Follow-up Required', 'Referred'];
 const DOCTOR_TEXT_LIMIT = 300;
 const DOSE_PATTERNS = ['1 - X - X', 'X - 1 - X', 'X - X - 1', '1 - 1 - X', '1 - X - 1', 'X - 1 - 1', '1 - 1 - 1'];
 
@@ -164,6 +164,13 @@ function broadcastClinicRefresh() {
   window.dispatchEvent(new Event('smile-records-appointments-change'));
   window.dispatchEvent(new Event('smile-records-queue-change'));
   window.dispatchEvent(new Event('smile-records-fees-change'));
+}
+
+function useLivePolling(callback, intervalMs = 5000) {
+  useEffect(() => {
+    const timer = window.setInterval(callback, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [callback, intervalMs]);
 }
 
 function focusPageTop(behavior = 'auto') {
@@ -606,6 +613,7 @@ function MobileShell({ role }) {
       window.removeEventListener('smile-records-fees-change', refreshShell);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 6000);
   useEffect(() => {
     const closeFloatingPanels = (event) => {
       const target = event.target;
@@ -658,6 +666,14 @@ function MobileShell({ role }) {
     setRefresh((value) => value + 1);
     navigate(notificationTarget(item));
     focusPageTop();
+  };
+  const clearNotifications = async () => {
+    try {
+      await apiPost('/notifications/clear-all', { email: currentUser?.email }, 'PATCH');
+      setRefresh((value) => value + 1);
+    } catch {
+      // Keep notification panel open if clear fails.
+    }
   };
   const menuItems = isDoctor
     ? [
@@ -712,7 +728,10 @@ function MobileShell({ role }) {
           <div className="mobile-notification-panel" ref={notificationRef}>
             <header>
               <strong>Notifications</strong>
-              <button type="button" aria-label="Close notifications" onClick={() => setNotificationOpen(false)}><X size={15} /></button>
+              <div className="notification-panel-actions">
+                {notifications.length > 0 && <button type="button" onClick={clearNotifications}>Clear all</button>}
+                <button type="button" aria-label="Close notifications" onClick={() => setNotificationOpen(false)}><X size={15} /></button>
+              </div>
             </header>
             {notifications.length ? notifications.map((item) => (
               <button className={item.status === 'Read' ? 'read' : ''} type="button" key={item.id} onClick={() => openNotification(item)}>
@@ -917,13 +936,14 @@ function AssistantIntake() {
   const [refresh, setRefresh] = useState(0);
   const [mode, setMode] = useState('appointments');
   const [selectedDate, setSelectedDate] = useState(todayDate());
+  const [intakeAppointmentDate, setIntakeAppointmentDate] = useState(todayDate());
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const { data, loading, error } = useApi('/cases', refresh);
   const { data: doctorOptionData } = useApi(`/assistant-doctor-options?assistantEmail=${encodeURIComponent(currentUser?.email || '')}`);
   const doctorOptions = doctorOptionData?.doctors || [];
   const effectiveDoctorId = doctorOptions.length === 1 ? doctorOptions[0].id : selectedDoctorId;
-  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${effectiveDoctorId ? `&doctorId=${encodeURIComponent(effectiveDoctorId)}` : ''}`;
+  const appointmentPath = `/appointments?date=${encodeURIComponent(intakeAppointmentDate)}${effectiveDoctorId ? `&doctorId=${encodeURIComponent(effectiveDoctorId)}` : ''}`;
   const { data: appointmentData } = useApi(appointmentPath, refresh);
   const mustSelectDoctor = doctorOptions.length > 1 && !selectedDoctorId;
   const selectedDoctor = doctorOptions.find((doctor) => doctor.id === effectiveDoctorId);
@@ -949,6 +969,7 @@ function AssistantIntake() {
   useEffect(() => {
     const refreshQueue = () => setRefresh((value) => value + 1);
     const openIntake = () => {
+      setIntakeAppointmentDate(selectedDate);
       setMode('new');
       focusPageTop();
     };
@@ -968,11 +989,12 @@ function AssistantIntake() {
       window.removeEventListener('smile-records-open-intake', openIntake);
       window.removeEventListener('smile-records-show-appointments', showAppointments);
     };
-  }, []);
+  }, [selectedDate]);
 
   useEffect(() => {
     focusPageTop('smooth');
   }, [mode]);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const submitPatient = async (event) => {
     event.preventDefault();
@@ -1008,6 +1030,7 @@ function AssistantIntake() {
     setMobileDecision('');
     setPatientDraft(emptyPatientDraft());
     setIntakeFeeEntries([createFeeEntry()]);
+    setSelectedDate(payload.appointmentDate || selectedDate);
     setMode('appointments');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
@@ -1163,15 +1186,27 @@ function AssistantIntake() {
           <SelectInput name="gender" label="Gender" controlledValue={patientDraft.gender} onChange={updatePatientDraft('gender')} options={GENDER_OPTIONS} required />
           <Input name="address" label="Address" controlledValue={patientDraft.address} onChange={updatePatientDraft('address')} required />
           <Input name="chiefComplaint" label="Complaint" controlledValue={patientDraft.chiefComplaint} onChange={updatePatientDraft('chiefComplaint')} required />
-          <Input name="toothNumber" label="Tooth" controlledValue={patientDraft.toothNumber} onChange={updatePatientDraft('toothNumber')} />
+          <Input
+            name="toothNumber"
+            label="Tooth"
+            controlledValue={patientDraft.toothNumber}
+            onChange={updatePatientDraft('toothNumber')}
+            type="number"
+            min="1"
+            max="32"
+            inputMode="numeric"
+            placeholder="1-32"
+          />
           <Input name="medicalFlags" label="Flags" controlledValue={patientDraft.medicalFlags} onChange={updatePatientDraft('medicalFlags')} placeholder="BP, allergy" />
-          <TimeSlotSelect name="appointmentTime" label="Time" bookedTimes={bookedTimes} required />
+          <div className="inline-fields">
+            <DateInput name="appointmentDate" label="Date" value={intakeAppointmentDate} onChange={(event) => setIntakeAppointmentDate(event.target.value || todayDate())} required wide={false} />
+            <TimeSlotSelect name="appointmentTime" label="Time" bookedTimes={bookedTimes} required />
+          </div>
           <div className="optional-fees-panel">
             <strong>Fees Collection <span>Optional before doctor consultation</span></strong>
             <FeeEntriesCapture entries={intakeFeeEntries} setEntries={setIntakeFeeEntries} />
           </div>
           <input type="hidden" name="hospitalId" value={activeHospitalId} />
-          <input type="hidden" name="appointmentDate" value={selectedDate} />
           <input type="hidden" name="assistantId" value={currentUser?.id || ''} />
           <input type="hidden" name="assistantName" value={displayUserName(currentUser, 'Assistant')} />
           <input type="hidden" name="consent" value="on" />
@@ -1302,6 +1337,7 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
       window.removeEventListener('smile-records-appointments-change', refreshAppointments);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
   const counts = scopedAppointments.reduce((acc, item) => {
     const key = item.status === 'waiting' ? 'scheduled' : item.status;
     acc[key] = (acc[key] || 0) + 1;
@@ -1395,9 +1431,10 @@ function AssistantFeesQueue() {
       window.removeEventListener('smile-records-fees-change', refreshFees);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const paidCases = (data?.cases || []).filter((item) => (
-    paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter
+    !isClosedAppointment(item) && (paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter)
   ));
 
   return (
@@ -1431,9 +1468,10 @@ function DoctorFeesQueue() {
       window.removeEventListener('smile-records-fees-change', refreshFees);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const paidCases = (data?.cases || []).filter((item) => (
-    paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter
+    !isClosedAppointment(item) && (paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter)
   ));
 
   return (
@@ -1650,11 +1688,15 @@ function AssistantFeesReconciliation() {
   const effectiveDoctorId = doctorOptions.length === 1 ? doctorOptions[0].id : selectedDoctorId;
   const feesPath = `/fees-summary?assistantEmail=${encodeURIComponent(currentUser?.email || '')}&date=${encodeURIComponent(selectedDate)}${effectiveDoctorId ? `&doctorId=${encodeURIComponent(effectiveDoctorId)}` : ''}`;
   const { data: feesData } = useApi(feesPath, refresh);
-  const { data: reconData } = useApi(`/fees-reconciliations?assistantEmail=${encodeURIComponent(currentUser?.email || '')}${effectiveDoctorId ? `&doctorId=${encodeURIComponent(effectiveDoctorId)}` : ''}`, refresh);
+  const { data: reconData } = useApi(`/fees-reconciliations?assistantEmail=${encodeURIComponent(currentUser?.email || '')}&date=${encodeURIComponent(selectedDate)}${effectiveDoctorId ? `&doctorId=${encodeURIComponent(effectiveDoctorId)}` : ''}`, refresh);
+  const selectedReconciliation = (reconData?.reconciliations || []).find((item) => item.date === selectedDate && (!effectiveDoctorId || item.doctorId === effectiveDoctorId));
+  const reconciliationClosed = selectedReconciliation?.status === 'Closed';
+  const reconciliationOpen = selectedReconciliation?.status === 'Open';
 
   useEffect(() => {
     if (!selectedDoctorId && doctorOptions.length) setSelectedDoctorId(doctorOptions[0].id);
   }, [doctorOptions.length, selectedDoctorId]);
+  useLivePolling(() => setRefresh((value) => value + 1), 6000);
 
   const submitRecon = async () => {
     setMessage('');
@@ -1676,8 +1718,8 @@ function AssistantFeesReconciliation() {
       {message && <div className="notice">{message}</div>}
       <DoctorRadioSelector doctors={doctorOptions} selectedDoctorId={effectiveDoctorId} onChange={setSelectedDoctorId} />
       <FeesDashboard data={feesData} active="all" onChange={() => {}} />
-      <button className="primary-button fees-open-button" type="button" onClick={submitRecon} disabled={!effectiveDoctorId || !(feesData?.summary?.totalCount)}>
-        <Send size={17} />Submit Reconciliation to Doctor
+      <button className="primary-button fees-open-button" type="button" onClick={submitRecon} disabled={!effectiveDoctorId || !(feesData?.summary?.totalCount) || reconciliationOpen || reconciliationClosed}>
+        <Send size={17} />{reconciliationClosed ? 'Reconciliation Closed' : reconciliationOpen ? 'Reconciliation Submitted' : 'Submit Reconciliation to Doctor'}
       </button>
       <ReconciliationList reconciliations={reconData?.reconciliations || []} />
     </MobilePage>
@@ -1690,6 +1732,7 @@ function DoctorFeesReconciliation() {
   const [refresh, setRefresh] = useState(0);
   const [message, setMessage] = useState('');
   const { data, loading, error } = useApi(`/fees-reconciliations?doctorEmail=${encodeURIComponent(currentUser?.email || '')}&date=${encodeURIComponent(selectedDate)}`, refresh);
+  useLivePolling(() => setRefresh((value) => value + 1), 6000);
 
   const approveRecon = async (item) => {
     setMessage('');
@@ -1757,7 +1800,7 @@ function AssistantCase() {
   const assistantCanMarkComplete = item ? canAssistantMarkComplete(item) : false;
   const visitAlreadyComplete = item ? item.status === 'completed' || item.visitStatus === 'visit_complete' : false;
   const visitCancelled = item ? item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled') : false;
-  const editAppointmentDate = item?.patient?.appointmentDate || todayDate();
+  const [editAppointmentDate, setEditAppointmentDate] = useState(todayDate());
   const editDoctorId = item?.assignedDoctorId || '';
   const editAppointmentPath = `/appointments?date=${encodeURIComponent(editAppointmentDate)}${editDoctorId ? `&doctorId=${encodeURIComponent(editDoctorId)}` : ''}`;
   const { data: editAppointmentData } = useApi(editAppointmentPath, refresh);
@@ -1771,6 +1814,10 @@ function AssistantCase() {
   const [assistantFeeEntries, setAssistantFeeEntries] = useState(() => [createFeeEntry()]);
   const [confirmFeesComplete, setConfirmFeesComplete] = useState(null);
   const [confirmCancelVisit, setConfirmCancelVisit] = useState(false);
+
+  useEffect(() => {
+    if (item?.patient?.appointmentDate) setEditAppointmentDate(item.patient.appointmentDate);
+  }, [item?.id, item?.patient?.appointmentDate]);
 
   useEffect(() => {
     if (item) setAssistantFeeEntries(feeEntriesFromClosure(item.closure));
@@ -1864,6 +1911,7 @@ function AssistantCase() {
             <SelectInput name="gender" label="Gender" value={item.patient.gender} options={GENDER_OPTIONS} disabled={assistantEditLocked} />
           </div>
           <div className="inline-fields">
+            <DateInput name="appointmentDate" label="Date" value={editAppointmentDate} onChange={(event) => setEditAppointmentDate(event.target.value || todayDate())} required wide={false} disabled={assistantEditLocked} />
             <TimeSlotSelect
               name="appointmentTime"
               label="Appointment time"
@@ -1872,10 +1920,7 @@ function AssistantCase() {
               required
               disabled={assistantEditLocked}
             />
-            <Input name="appointmentDateView" label="Date" value={formatDateOnly(editAppointmentDate)} disabled />
           </div>
-          <input type="hidden" name="appointmentDate" value={editAppointmentDate} />
-          <Input name="city" label="City" value={item.patient.city} disabled={assistantEditLocked} />
           <Input name="address" label="Address" value={item.patient.address} wide disabled={assistantEditLocked} />
           {!assistantEditLocked && (
             <div className="optional-fees-panel wide">
@@ -2040,7 +2085,7 @@ function DoctorCase() {
         <MobileSection title="Analysis">
           <TextAreaInput name="diagnosis" label="Diagnosis / analysis" value={item.doctor?.diagnosis} required maxLength={DOCTOR_TEXT_LIMIT} />
           <TextAreaInput name="treatmentPlan" label="Treatment plan" value={item.doctor?.treatmentPlan} required maxLength={DOCTOR_TEXT_LIMIT} />
-          <SelectInput name="treatmentStatus" label="Treatment status" value={item.doctor?.treatmentStatus || 'In Progress'} options={TREATMENT_STATUS_OPTIONS} required wide />
+          <SelectInput name="treatmentStatus" label="Treatment status" value={item.doctor?.treatmentStatus === 'In Progress' ? 'Pending' : (item.doctor?.treatmentStatus || 'Pending')} options={TREATMENT_STATUS_OPTIONS} required wide />
           <TextAreaInput name="doctorNotes" label="Doctor notes" value={item.doctor?.doctorNotes} maxLength={DOCTOR_TEXT_LIMIT} />
         </MobileSection>
         <MobileSection title="Tests and Prescription">
@@ -2113,6 +2158,7 @@ function MobileAnalytics({ role }) {
       window.removeEventListener('smile-records-fees-change', refreshDashboard);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
   const metricValue = (label) => dashboard?.metrics?.find((item) => item.label === label)?.value || 0;
   const assistantCards = [
     { label: 'Patients', value: metricValue('Total Patients') },
@@ -2199,6 +2245,7 @@ function DoctorDashboard() {
       window.removeEventListener('smile-records-fees-change', refreshDashboard);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const metrics = data?.metrics || {};
   const amountCollected = metrics.amountCollected || {};
@@ -2491,6 +2538,7 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
       window.removeEventListener('smile-records-appointments-change', refreshAppointments);
     };
   }, []);
+  useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const moveAppointment = (fromIndex, toIndex) => {
     if (fromIndex === null || fromIndex === toIndex) return;
@@ -3857,7 +3905,7 @@ function Section({ title, children }) {
   );
 }
 
-function Input({ label, wide, value, controlledValue, name, required, placeholder, onBlur, onChange, disabled }) {
+function Input({ label, wide, value, controlledValue, name, required, placeholder, onBlur, onChange, disabled, type = 'text', min, max, inputMode, pattern, title }) {
   const mobileProps = name === 'mobile'
     ? {
         pattern: '^[6-9][0-9]{9}$',
@@ -3866,13 +3914,20 @@ function Input({ label, wide, value, controlledValue, name, required, placeholde
         maxLength: 10
       }
     : {};
+  const numberProps = {
+    ...(min !== undefined ? { min } : {}),
+    ...(max !== undefined ? { max } : {}),
+    ...(inputMode ? { inputMode } : {}),
+    ...(pattern ? { pattern } : {}),
+    ...(title ? { title } : {})
+  };
   const controlProps = controlledValue !== undefined
     ? { value: controlledValue, onChange: onChange || (() => {}) }
     : { defaultValue: value || '', onChange };
   return (
     <label className={wide ? 'field wide' : 'field'}>
       <span>{label}{required && <b className="required-star">*</b>}</span>
-      <input name={name} required={required} placeholder={placeholder || ''} onBlur={onBlur} disabled={disabled} {...mobileProps} {...controlProps} />
+      <input name={name} type={type} required={required} placeholder={placeholder || ''} onBlur={onBlur} disabled={disabled} {...numberProps} {...mobileProps} {...controlProps} />
     </label>
   );
 }
@@ -3915,11 +3970,34 @@ function TextAreaInput({ label, wide = true, value, name, required, placeholder,
   );
 }
 
-function DateInput({ label, wide = true, value, name, required, disabled }) {
+function DateInput({ label, wide = true, value, name, required, disabled, onChange }) {
+  const inputRef = useRef(null);
+  const valueProps = onChange ? { value: value || '', onChange } : { defaultValue: value || '' };
+  const openPicker = () => {
+    const input = inputRef.current;
+    if (!input || disabled) return;
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
   return (
-    <label className={wide ? 'field wide' : 'field'}>
+    <label className={wide ? 'field wide date-field' : 'field date-field'} onClick={openPicker}>
       <span>{label}{required && <b className="required-star">*</b>}</span>
-      <input name={name} type="date" defaultValue={value || ''} required={required} disabled={disabled} />
+      <input
+        ref={inputRef}
+        name={name}
+        type="date"
+        required={required}
+        disabled={disabled}
+        {...valueProps}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (typeof event.currentTarget.showPicker === 'function') event.currentTarget.showPicker();
+        }}
+      />
     </label>
   );
 }
@@ -4210,7 +4288,6 @@ function formToBasic(form) {
       mobile: data.mobile,
       age: data.age,
       gender: data.gender,
-      city: data.city,
       address: data.address
     }
   };
