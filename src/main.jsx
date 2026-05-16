@@ -167,10 +167,16 @@ function broadcastClinicRefresh() {
 }
 
 function useLivePolling(callback, intervalMs = 5000) {
+  const callbackRef = useRef(callback);
+
   useEffect(() => {
-    const timer = window.setInterval(callback, intervalMs);
+    callbackRef.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => callbackRef.current(), intervalMs);
     return () => window.clearInterval(timer);
-  }, [callback, intervalMs]);
+  }, [intervalMs]);
 }
 
 function focusPageTop(behavior = 'auto') {
@@ -199,7 +205,7 @@ function useApi(path, refreshKey = 0) {
 
   useEffect(() => {
     let active = true;
-    setState({ loading: true, data: null, error: null });
+    setState((current) => ({ loading: !current.data, data: current.data, error: null }));
     fetch(apiUrl(path), { headers: apiHeaders() })
       .then((response) => {
         if (!response.ok) throw new Error(`API ${response.status}`);
@@ -2000,7 +2006,6 @@ function DoctorQueue() {
         activeStatus={dashboardStatus}
         onStatusChange={() => {}}
         label={tab === 'my' ? 'My Queue - Live' : 'Overall Queue - Live'}
-        scopeStatus={tab === 'my' ? 'doctor_queue' : ''}
         doctorId={doctorId}
         doctorEmail={mappedScope}
       />
