@@ -1186,17 +1186,6 @@ function AssistantIntake() {
           <SelectInput name="gender" label="Gender" controlledValue={patientDraft.gender} onChange={updatePatientDraft('gender')} options={GENDER_OPTIONS} required />
           <Input name="address" label="Address" controlledValue={patientDraft.address} onChange={updatePatientDraft('address')} required />
           <Input name="chiefComplaint" label="Complaint" controlledValue={patientDraft.chiefComplaint} onChange={updatePatientDraft('chiefComplaint')} required />
-          <Input
-            name="toothNumber"
-            label="Tooth"
-            controlledValue={patientDraft.toothNumber}
-            onChange={updatePatientDraft('toothNumber')}
-            type="number"
-            min="1"
-            max="32"
-            inputMode="numeric"
-            placeholder="1-32"
-          />
           <Input name="medicalFlags" label="Flags" controlledValue={patientDraft.medicalFlags} onChange={updatePatientDraft('medicalFlags')} placeholder="BP, allergy" />
           <div className="inline-fields appointment-slot-fields">
             <DateInput name="appointmentDate" label="Date" value={intakeAppointmentDate} onChange={(event) => setIntakeAppointmentDate(event.target.value || todayDate())} required wide={false} />
@@ -1285,7 +1274,6 @@ function PatientLookupModal({ patients, onUseExisting, onCreateNew, onClose }) {
               <div className="patient-match-details">
                 <div><span>Last visit</span><strong>{patient.lastVisitDate || 'Not available'}</strong></div>
                 <div><span>Status</span><strong>{patient.treatmentStatus || 'Not available'}</strong></div>
-                <div><span>Tooth</span><strong>{patient.toothNumber || '-'}</strong></div>
                 <div><span>Flags</span><strong>{patient.medicalFlags?.join(', ') || 'None'}</strong></div>
               </div>
               <PatientHistoryDays historyDays={patient.historyDays || []} compact />
@@ -2500,7 +2488,7 @@ function CompactPatientRows({ loading, error, cases, onRefresh }) {
               </div>
               <div className="row-detail">
                 <strong>{item.patient.chiefComplaint || '-'}</strong>
-                <span>T{item.patient.toothNumber || '-'} · {item.patient.medicalFlags?.join('/') || 'No flags'}</span>
+                <span>{item.patient.medicalFlags?.join('/') || 'No flags'}</span>
               </div>
               <Status value={formatStatus(item.visitStatus || item.status)} />
               <div className="row-actions">
@@ -3000,7 +2988,6 @@ function AdminPatientDetails() {
               <div><span>Address</span><strong>{patient.address || patient.city || '-'}</strong></div>
               <div><span>Treatment Status</span><strong>{patient.treatmentStatus || '-'}</strong></div>
               <div><span>Complaint</span><strong>{patient.chiefComplaint || '-'}</strong></div>
-              <div><span>Tooth</span><strong>{patient.toothNumber || '-'}</strong></div>
               <div><span>Medical Flags</span><strong>{Array.isArray(patient.medicalFlags) ? patient.medicalFlags.join(', ') : patient.medicalFlags || '-'}</strong></div>
               <div><span>Last Visit</span><strong>{patient.lastVisitDate || '-'}</strong></div>
             </div>
@@ -3740,7 +3727,6 @@ function CaseSummary({ item, compact, hideHistory = false }) {
       <h3>Case Summary</h3>
       <dl>
         <div><dt>Complaint</dt><dd>{item.patient.chiefComplaint || '-'}</dd></div>
-        <div><dt>Pain / Tooth</dt><dd>{item.patient.painLevel || '-'} / {item.patient.toothNumber || '-'}</dd></div>
         <div><dt>Medical flags</dt><dd>{item.patient.medicalFlags?.join(', ') || 'None'}</dd></div>
         {!compact && <div><dt>Prescription</dt><dd>{item.doctor?.prescription || 'Not yet added'}</dd></div>}
         {!compact && <div><dt>Tests</dt><dd>{item.doctor?.testsRequested?.join(', ') || 'Not requested'}</dd></div>}
@@ -4212,8 +4198,6 @@ function formToPatient(form) {
       city: data.city || '',
       address: data.address || '',
       chiefComplaint: data.chiefComplaint || '',
-      painLevel: data.painLevel || '',
-      toothNumber: data.toothNumber || '',
       medicalFlags: splitList(data.medicalFlags),
       guardian: data.guardian || '',
       consent: Boolean(data.consent)
@@ -4377,7 +4361,6 @@ function emptyPatientDraft() {
     gender: '',
     address: '',
     chiefComplaint: '',
-    toothNumber: '',
     medicalFlags: ''
   };
 }
@@ -4390,7 +4373,6 @@ function patientToDraft(patient = {}) {
     gender: patient.gender || '',
     address: patient.address || patient.city || '',
     chiefComplaint: patient.chiefComplaint || '',
-    toothNumber: patient.toothNumber || '',
     medicalFlags: Array.isArray(patient.medicalFlags)
       ? patient.medicalFlags.join(', ')
       : (Array.isArray(patient.flags) ? patient.flags.join(', ') : (patient.medicalFlags || patient.flags || ''))
@@ -4413,7 +4395,6 @@ function applyPatientToForm(form, patient) {
   setValue('gender', patient.gender);
   setValue('address', patient.address);
   setValue('chiefComplaint', patient.chiefComplaint);
-  setValue('toothNumber', patient.toothNumber);
   setValue('medicalFlags', patient.medicalFlags || []);
 }
 
