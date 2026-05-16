@@ -3935,6 +3935,11 @@ button.date-selector {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.appointment-slot-fields {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
 .sticky-actions {
   background: rgba(247, 250, 251, 0.94);
   bottom: 62px;
@@ -4832,6 +4837,10 @@ td span {
   .quick-intake .field:nth-child(3),
   .quick-intake .field:nth-child(6) {
     grid-column: 1 / -1;
+  }
+
+  .appointment-slot-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .patient-row {

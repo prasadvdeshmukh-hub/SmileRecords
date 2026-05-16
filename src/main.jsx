@@ -1198,7 +1198,7 @@ function AssistantIntake() {
             placeholder="1-32"
           />
           <Input name="medicalFlags" label="Flags" controlledValue={patientDraft.medicalFlags} onChange={updatePatientDraft('medicalFlags')} placeholder="BP, allergy" />
-          <div className="inline-fields">
+          <div className="inline-fields appointment-slot-fields">
             <DateInput name="appointmentDate" label="Date" value={intakeAppointmentDate} onChange={(event) => setIntakeAppointmentDate(event.target.value || todayDate())} required wide={false} />
             <TimeSlotSelect name="appointmentTime" label="Time" bookedTimes={bookedTimes} required />
           </div>
@@ -1910,7 +1910,7 @@ function AssistantCase() {
             <Input name="age" label="Age" value={item.patient.age} disabled={assistantEditLocked} />
             <SelectInput name="gender" label="Gender" value={item.patient.gender} options={GENDER_OPTIONS} disabled={assistantEditLocked} />
           </div>
-          <div className="inline-fields">
+          <div className="inline-fields appointment-slot-fields">
             <DateInput name="appointmentDate" label="Date" value={editAppointmentDate} onChange={(event) => setEditAppointmentDate(event.target.value || todayDate())} required wide={false} disabled={assistantEditLocked} />
             <TimeSlotSelect
               name="appointmentTime"
