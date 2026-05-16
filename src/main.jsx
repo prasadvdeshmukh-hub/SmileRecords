@@ -1036,7 +1036,8 @@ function AssistantIntake() {
     setMobileDecision('');
     setPatientDraft(emptyPatientDraft());
     setIntakeFeeEntries([createFeeEntry()]);
-    setSelectedDate(payload.appointmentDate || selectedDate);
+    setSelectedDate(todayDate());
+    setIntakeAppointmentDate(todayDate());
     setMode('appointments');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
@@ -1223,7 +1224,7 @@ function AssistantIntake() {
       ) : (
         <>
           <DoctorRadioSelector doctors={doctorOptions} selectedDoctorId={effectiveDoctorId} onChange={setSelectedDoctorId} />
-          <TodayStatusDashboard selectedDate={selectedDate} activeStatus={statusFilter} onStatusChange={setStatusFilter} doctorId={effectiveDoctorId} />
+          <TodayStatusDashboard selectedDate={selectedDate} activeStatus={statusFilter} onStatusChange={setStatusFilter} doctorId={effectiveDoctorId} assistantEmail={currentUser?.email || ''} />
           <AppointmentCalendar compact selectedDate={selectedDate} statusFilter={statusFilter} role="assistant" doctorId={effectiveDoctorId} />
         </>
       )}
@@ -1315,10 +1316,12 @@ function PatientHistoryDays({ historyDays = [], compact = false }) {
   );
 }
 
-function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, label = 'Today Status', scopeStatus = '', doctorId = '', doctorEmail = '' }) {
+function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, label = 'Today Status', scopeStatus = '', doctorId = '', doctorEmail = '', assistantEmail = '' }) {
   const [refresh, setRefresh] = useState(0);
   const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}`;
+  const feesPath = `/fees-summary?date=${encodeURIComponent(selectedDate)}${assistantEmail ? `&assistantEmail=${encodeURIComponent(assistantEmail)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}` : ''}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}`;
   const { data, loading } = useApi(appointmentPath, refresh);
+  const { data: feesData, loading: feesLoading } = useApi(feesPath, refresh);
   const appointments = data?.appointments || [];
   const scopedAppointments = scopeStatus ? appointments.filter((item) => item.status === scopeStatus) : appointments;
 
@@ -1326,22 +1329,32 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
     const refreshAppointments = () => setRefresh((value) => value + 1);
     window.addEventListener('smile-records-refresh', refreshAppointments);
     window.addEventListener('smile-records-appointments-change', refreshAppointments);
+    window.addEventListener('smile-records-fees-change', refreshAppointments);
     return () => {
       window.removeEventListener('smile-records-refresh', refreshAppointments);
       window.removeEventListener('smile-records-appointments-change', refreshAppointments);
+      window.removeEventListener('smile-records-fees-change', refreshAppointments);
     };
   }, []);
   useLivePolling(() => setRefresh((value) => value + 1), 5000);
   const counts = scopedAppointments.reduce((acc, item) => {
-    const key = item.status === 'waiting' ? 'scheduled' : item.status;
+    const key = isClosedAppointment(item)
+      ? 'complete'
+      : isCancelledAppointment(item)
+        ? 'cancelled'
+        : item.status === 'waiting'
+          ? 'scheduled'
+          : item.status;
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
+  const readyFeesCount = feesData?.readyCases?.length || 0;
+  const feesCollectionCount = Math.max(counts.doctor_done || 0, readyFeesCount);
   const tiles = [
-    { label: 'All', status: 'all', value: scopedAppointments.length },
+    { label: 'All', status: 'all', value: scopedAppointments.length + Math.max(0, readyFeesCount - (counts.doctor_done || 0)) },
     { label: 'Scheduled', status: 'scheduled', value: counts.scheduled || 0 },
     { label: "DR's Que", status: 'doctor_queue', value: counts.doctor_queue || 0 },
-    { label: 'Fees Collection', status: 'doctor_done', value: counts.doctor_done || 0 },
+    { label: 'Fees Collection', status: 'doctor_done', value: feesCollectionCount },
     { label: 'Closed', status: 'complete', value: counts.complete || 0 },
     { label: 'Cancelled', status: 'cancelled', value: counts.cancelled || 0 }
   ];
@@ -1357,7 +1370,7 @@ function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, labe
             </>
           ) : label}
         </strong>
-        <span>{loading ? 'Syncing' : `${scopedAppointments.length} appointments`}</span>
+        <span>{loading || feesLoading ? 'Syncing' : `${tiles[0].value} appointments`}</span>
       </header>
       <div className="today-status-grid">
         {tiles.map((tile) => (
@@ -1428,7 +1441,7 @@ function AssistantFeesQueue() {
   useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const paidCases = (data?.cases || []).filter((item) => (
-    !isClosedAppointment(item) && (paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter)
+    paymentFilter === 'all' || feeCaseHasPaymentMode(item, paymentFilter)
   ));
 
   return (
@@ -1465,7 +1478,7 @@ function DoctorFeesQueue() {
   useLivePolling(() => setRefresh((value) => value + 1), 5000);
 
   const paidCases = (data?.cases || []).filter((item) => (
-    !isClosedAppointment(item) && (paymentFilter === 'all' || item.closure?.paymentMode === paymentFilter)
+    paymentFilter === 'all' || feeCaseHasPaymentMode(item, paymentFilter)
   ));
 
   return (
@@ -1531,23 +1544,19 @@ function FeesWorkflowList({ loading, error, cases, mode = 'ready', toPrefix = '/
           key={item.id}
           to={`${toPrefix}/${item.id}`}
           state={{ from: 'fees' }}
-          onClick={(event) => {
-            if (mode === 'paid') {
-              event.preventDefault();
-              setMessage('Fees already collected. Completed fee records cannot be edited.');
-            }
-          }}
         >
           <div className="appointment-number">{index + 1}</div>
           <div className="appointment-main">
             <strong className="appointment-name">{item.patient.name}</strong>
             <span>{item.patient.mobile}</span>
+          </div>
+          <div className="fees-payment-cell">
             {mode === 'paid' && <small className="fees-payment-line">{feeSummaryLine(item.closure)}</small>}
           </div>
           <div className="appointment-send-cell">
             <Status value={mode === 'ready' ? 'Fees Pending' : 'Fees Collected'} />
             <span className="send-appointment-button">
-              {mode === 'ready' ? 'Open' : 'Paid'}
+              {mode === 'ready' ? 'Open' : 'Edit'}
             </span>
           </div>
         </NavLink>
@@ -1793,6 +1802,7 @@ function AssistantCase() {
   const assistantCanCollectFees = item ? canAssistantCollectFees(item) : false;
   const assistantCanMarkComplete = item ? canAssistantMarkComplete(item) : false;
   const visitAlreadyComplete = item ? item.status === 'completed' || item.visitStatus === 'visit_complete' : false;
+  const assistantCanEditCollectedFees = Boolean(visitAlreadyComplete && item?.closure?.feesCollected);
   const visitCancelled = item ? item.status === 'cancelled' || String(item.visitStatus || '').includes('cancelled') : false;
   const [editAppointmentDate, setEditAppointmentDate] = useState(todayDate());
   const editDoctorId = item?.assignedDoctorId || '';
@@ -1832,12 +1842,8 @@ function AssistantCase() {
 
   const closeAssistantWork = async (event) => {
     event.preventDefault();
-    if (!(assistantCanCollectFees || assistantCanMarkComplete)) {
+    if (!(assistantCanCollectFees || assistantCanMarkComplete || assistantCanEditCollectedFees)) {
       setMessage('Doctor has not completed analysis yet. Assistant can cancel the visit or wait for doctor completion.');
-      return;
-    }
-    if (visitAlreadyComplete) {
-      setMessage('Visit is already marked complete.');
       return;
     }
     const formData = new FormData(event.currentTarget);
@@ -1856,11 +1862,19 @@ function AssistantCase() {
 
   const saveFeesAndComplete = async () => {
     if (!confirmFeesComplete) return;
-    await apiPost(`/cases/${caseId}/assistant-close`, confirmFeesComplete, 'PATCH');
-    await apiPost(`/cases/${caseId}/visit-complete`, { actor: 'Assistant' }, 'PATCH');
+    try {
+      await apiPost(`/cases/${caseId}/assistant-close`, confirmFeesComplete, 'PATCH');
+      if (!visitAlreadyComplete) {
+        await apiPost(`/cases/${caseId}/visit-complete`, { actor: 'Assistant' }, 'PATCH');
+      }
+    } catch (error) {
+      setMessage(error.message || 'Unable to update fees. Please try again.');
+      setConfirmFeesComplete(null);
+      return;
+    }
     setConfirmFeesComplete(null);
     setMessage('');
-    setCompletionNotice('Fees saved and visit marked complete successfully.');
+    setCompletionNotice(visitAlreadyComplete ? 'Fees updated successfully.' : 'Fees saved and visit marked complete successfully.');
     broadcastClinicRefresh();
     setRefresh((value) => value + 1);
     if (cameFromFees) {
@@ -1898,24 +1912,24 @@ function AssistantCase() {
       )}
       <MobileSection title="Assistant Basic Details">
         <form className="mobile-form assistant-basic-compact" onSubmit={updateBasic}>
-          <Input name="name" label="Patient name" value={item.patient.name} disabled={assistantEditLocked} />
-          <Input name="mobile" label="Mobile" value={item.patient.mobile} disabled={assistantEditLocked} />
-          <div className="inline-fields">
-            <Input name="age" label="Age" value={item.patient.age} disabled={assistantEditLocked} />
-            <SelectInput name="gender" label="Gender" value={item.patient.gender} options={GENDER_OPTIONS} disabled={assistantEditLocked} />
-          </div>
+          <Input name="mobile" label="Mobile" value={item.patient.mobile} required disabled={assistantEditLocked} />
+          <Input name="name" label="Name" value={item.patient.name} required disabled={assistantEditLocked} />
+          <Input name="age" label="Age" value={item.patient.age} required disabled={assistantEditLocked} />
+          <SelectInput name="gender" label="Gender" value={item.patient.gender} options={GENDER_OPTIONS} required disabled={assistantEditLocked} />
+          <Input name="address" label="Address" value={item.patient.address} required disabled={assistantEditLocked} />
+          <Input name="chiefComplaint" label="Complaint" value={item.patient.chiefComplaint} required disabled={assistantEditLocked} />
+          <Input name="medicalFlags" label="Flags" value={formatPatientFlags(item.patient.medicalFlags || item.patient.flags)} placeholder="BP, allergy" disabled={assistantEditLocked} />
           <div className="inline-fields appointment-slot-fields">
             <DateInput name="appointmentDate" label="Date" value={editAppointmentDate} onChange={(event) => setEditAppointmentDate(event.target.value || todayDate())} required wide={false} disabled={assistantEditLocked} />
             <TimeSlotSelect
               name="appointmentTime"
-              label="Appointment time"
+              label="Time"
               bookedTimes={editBookedTimes}
               value={item.patient.appointmentTime}
               required
               disabled={assistantEditLocked}
             />
           </div>
-          <Input name="address" label="Address" value={item.patient.address} wide disabled={assistantEditLocked} />
           {!assistantEditLocked && (
             <div className="optional-fees-panel wide">
               <strong>Fees Collection <span>Optional before doctor consultation</span></strong>
@@ -1931,26 +1945,30 @@ function AssistantCase() {
         <Printer size={17} />
         Print Prescription
       </button>
-      {(assistantCanCollectFees || assistantCanMarkComplete || visitAlreadyComplete) && (
-      <MobileSection title="Fees Collection">
+      {(assistantCanCollectFees || assistantCanMarkComplete || assistantCanEditCollectedFees || visitAlreadyComplete) && (
+      <MobileSection title="Fees Collection" className="case-fees-section">
         <form className="mobile-form" onSubmit={closeAssistantWork}>
           <FeeEntriesCapture
             entries={assistantFeeEntries}
             setEntries={setAssistantFeeEntries}
             required
-            disabled={!(assistantCanCollectFees || assistantCanMarkComplete) || visitAlreadyComplete}
+            disabled={!(assistantCanCollectFees || assistantCanMarkComplete || assistantCanEditCollectedFees)}
+            footerAction={(
+              <button className="primary-button fee-submit-button" type="submit" disabled={!(assistantCanCollectFees || assistantCanMarkComplete || assistantCanEditCollectedFees)}>
+                <CheckCircle2 size={17} />{assistantCanEditCollectedFees ? 'Update fees and close case' : 'Save and Mark Visit Complete'}
+              </button>
+            )}
           />
-          <div className="notice warning-notice fees-submit-warning">
-            Once submitted, the visit will be marked completed and cannot be edited by Assistant.
-          </div>
-          <button className="primary-button" type="submit" disabled={!(assistantCanCollectFees || assistantCanMarkComplete) || visitAlreadyComplete}>
-            <CheckCircle2 size={17} />Save and Mark Visit Complete
-          </button>
+          {!assistantCanEditCollectedFees && (
+            <div className="notice warning-notice fees-submit-warning">
+              Once submitted, the visit will be marked completed and cannot be edited by Assistant.
+            </div>
+          )}
         </form>
       </MobileSection>
       )}
       {visitAlreadyComplete ? (
-        <div className="notice">Visit is complete. No further assistant action is required.</div>
+        <div className="notice">{assistantCanEditCollectedFees ? 'Visit is complete. You can update the collected fees from this Fees tab record.' : 'Visit is complete. No further assistant action is required.'}</div>
       ) : visitCancelled ? (
         <div className="notice warning-notice">Visit is cancelled.</div>
       ) : !assistantCanCollectFees && !assistantCanMarkComplete && (
@@ -1962,8 +1980,8 @@ function AssistantCase() {
       {confirmFeesComplete && (
         <div className="confirm-overlay fixed-confirm" role="dialog" aria-modal="true">
           <div className="confirm-card">
-            <strong>Complete visit?</strong>
-            <p>Once submitted, this visit will be marked as completed and Assistant cannot edit it again.</p>
+            <strong>{visitAlreadyComplete ? 'Update fees and close case?' : 'Complete visit?'}</strong>
+            <p>{visitAlreadyComplete ? 'This will update the collected fees and keep this case in Closed Cases.' : 'Once submitted, this visit will be marked as completed and Assistant cannot edit it again.'}</p>
             <div>
               <button type="button" onClick={() => setConfirmFeesComplete(null)}>Cancel</button>
               <button type="button" onClick={saveFeesAndComplete}>Confirm Submit</button>
@@ -2573,7 +2591,8 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
   };
 
   const visibleAppointments = appointments.filter((item) => {
-    const statusMatches = statusFilter === 'all' || item.status === statusFilter;
+    const statusMatches = statusFilter === 'all'
+      || (statusFilter === 'complete' ? isClosedAppointment(item) : item.status === statusFilter);
     const doctorMatches = !doctorId || item.doctorId === doctorId;
     return statusMatches && doctorMatches;
   });
@@ -2601,8 +2620,7 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
   const renderRows = (rows, sectionName, offset = 0) => (
     <div className="appointment-section">
       <header>
-        <strong>{sectionName}</strong>
-        <span>{rows.length}</span>
+        <strong>{sectionName} ({rows.length})</strong>
       </header>
       {rows.length ? rows.map((item, index) => (
         <AppointmentRow
@@ -3833,8 +3851,8 @@ function DatePickerControl({ value, onChange }) {
   );
 }
 
-function MobileSection({ title, children }) {
-  return <section className="mobile-section"><h3>{title}</h3>{children}</section>;
+function MobileSection({ title, children, className = '' }) {
+  return <section className={`mobile-section${className ? ` ${className}` : ''}`}><h3>{title}</h3>{children}</section>;
 }
 
 function Page({ title, eyebrow, children }) {
@@ -3993,7 +4011,7 @@ function DateInput({ label, wide = true, value, name, required, disabled, onChan
   );
 }
 
-function FeeEntriesCapture({ entries, setEntries, required = false, disabled = false }) {
+function FeeEntriesCapture({ entries, setEntries, required = false, disabled = false, footerAction = null }) {
   const updateEntry = (id, key, value) => {
     setEntries((current) => current.map((entry) => (entry.id === id ? { ...entry, [key]: value } : entry)));
   };
@@ -4070,10 +4088,15 @@ function FeeEntriesCapture({ entries, setEntries, required = false, disabled = f
           </div>
         );
       })}
-      {!disabled && (
-        <button className="secondary-button add-fee-button" type="button" onClick={addEntry}>
-          <Plus size={16} />Add additional fees
-        </button>
+      {(!disabled || footerAction) && (
+        <div className="fee-entry-actions">
+          {!disabled && (
+            <button className="secondary-button add-fee-button" type="button" onClick={addEntry}>
+              <Plus size={16} />Add additional fees
+            </button>
+          )}
+          {footerAction}
+        </div>
       )}
     </div>
   );
@@ -4182,6 +4205,11 @@ function feeSummaryLine(closure = {}) {
   return `${entries.length} payments - ${formatCurrency(feePayloadFromEntries(entries).feesCollected)}`;
 }
 
+function feeCaseHasPaymentMode(item, paymentMode) {
+  return feeEntriesFromClosure(item?.closure)
+    .some((entry) => entry.paymentMode === paymentMode && entry.amount);
+}
+
 function formToPatient(form) {
   const data = Object.fromEntries(new FormData(form));
   const feePayload = feePayloadFromEntries(feeEntriesFromFormData(new FormData(form)));
@@ -4277,7 +4305,9 @@ function formToBasic(form) {
       mobile: data.mobile,
       age: data.age,
       gender: data.gender,
-      address: data.address
+      address: data.address,
+      chiefComplaint: data.chiefComplaint,
+      medicalFlags: splitList(data.medicalFlags)
     }
   };
 }
@@ -4289,6 +4319,11 @@ function splitList(value = '') {
 function formatList(items = []) {
   if (!Array.isArray(items)) return '';
   return items.map((item) => (typeof item === 'string' ? item : formatMedicineDoseLine(item))).filter(Boolean).join(', ');
+}
+
+function formatPatientFlags(value = []) {
+  if (Array.isArray(value)) return value.join(', ');
+  return String(value || '');
 }
 
 function formatPrescriptionLine(doctor = {}) {

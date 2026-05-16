@@ -3062,8 +3062,10 @@ button.date-selector {
 
 .fees-payment-line {
   color: var(--muted);
+  display: block;
   font-size: 12px;
   font-weight: 800;
+  text-align: right;
 }
 
 .doctor-wise-fees {
@@ -3139,10 +3141,17 @@ button.date-selector {
   color: inherit;
   display: grid;
   gap: 7px;
-  grid-template-columns: 38px minmax(0, 1fr) minmax(116px, auto);
+  grid-template-columns: 38px minmax(0, 1fr) minmax(82px, max-content) minmax(116px, auto);
   min-height: 50px;
   padding: 7px;
   text-decoration: none;
+}
+
+.fees-payment-cell {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .fees-queue-row .appointment-send-cell {
@@ -3573,6 +3582,26 @@ button.date-selector {
 .add-fee-button {
   justify-content: center;
   min-height: 34px;
+}
+
+.fee-entry-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.fee-entry-actions .add-fee-button,
+.fee-entry-actions .fee-submit-button {
+  justify-content: center;
+  min-height: 38px;
+  width: 100%;
+}
+
+@media (min-width: 560px) {
+  .fee-entry-actions {
+    align-items: stretch;
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  }
 }
 
 .new-patient-sheet .field span {
@@ -4910,6 +4939,19 @@ td span {
 
 .mobile-title h2 {
   font-size: var(--sr-header-size);
+  font-weight: 850;
+  line-height: 1.12;
+}
+
+.mobile-title h2 span {
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.mobile-section.case-fees-section h3 {
+  font-size: var(--sr-header-size);
+  font-weight: 850;
   line-height: 1.12;
 }
 

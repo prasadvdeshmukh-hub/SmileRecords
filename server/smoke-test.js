@@ -288,6 +288,19 @@ async function run() {
     body: JSON.stringify({ actor: 'Assistant' })
   });
   assert(completed.case.status === 'completed', 'Visit was not completed');
+  const updatedFees = await request(`/cases/${caseId}/assistant-close`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      feesCollected: '700',
+      paymentMode: 'Cash',
+      assistantNotes: 'Additional fees collected'
+    })
+  });
+  assert(updatedFees.case.status === 'completed', 'Updating completed fees should not reopen visit');
+  assert(updatedFees.case.closure.feesCollected === '700', 'Completed visit fees should be editable from fees queue');
+  const completedAppointment = (await request(`/appointments?date=${today}&doctorId=U-6`)).appointments.find((item) => item.caseId === caseId);
+  assert(completedAppointment?.status === 'complete', 'Updating completed fees should keep appointment in Closed Cases');
+  assert(completedAppointment?.visitStatus === 'visit_complete', 'Completed appointments should carry visit status for Today Status counts');
   const feesQueueAfterComplete = await request('/cases?queue=assistant-closure&doctorId=U-6');
   assert(!feesQueueAfterComplete.cases.some((item) => item.id === caseId), 'Completed visit should leave fees queue');
 
@@ -295,7 +308,7 @@ async function run() {
   assert(doctorAppointments.appointments.every((item) => item.doctorId === 'U-6'), 'Appointment doctor filter failed');
 
   const feesSummary = await request(`/fees-summary?assistantEmail=assistant@test.smile&date=${today}&doctorId=U-6`);
-  assert(feesSummary.summary.cashAmount >= 500, 'Fees summary should include collected cash amount');
+  assert(feesSummary.summary.cashAmount >= 700, 'Fees summary should include updated collected cash amount');
   assert(feesSummary.cases.some((item) => item.id === caseId), 'Fees summary should list paid patient case');
 
   const reconciliation = await request('/fees-reconciliations', {

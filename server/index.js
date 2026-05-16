@@ -314,17 +314,29 @@ app.get('/api/appointments', (req, res) => {
   const selectedDate = req.query.date;
   const doctorId = String(req.query.doctorId || '').trim();
   const doctor = findDoctor('', req.query.doctorEmail);
+  const caseForAppointment = (appointment) => db.cases.find((caseItem) => caseItem.id === appointment.caseId || caseItem.queueNumber === appointment.queueNumber);
   let appointments = selectedDate
-    ? db.appointments.filter((item) => appointmentDate(item) === selectedDate)
+    ? db.appointments.filter((item) => {
+      const linkedCase = caseForAppointment(item);
+      return appointmentDate(item) === selectedDate || (linkedCase && isCompletedCase(linkedCase) && caseActivityDate(linkedCase) === selectedDate);
+    })
     : db.appointments;
   if (doctorId) appointments = appointments.filter((item) => item.doctorId === doctorId);
   if (doctor && req.query.scope === 'mapped') {
     appointments = appointments.filter((appointment) => {
-      const item = db.cases.find((caseItem) => caseItem.id === appointment.caseId || caseItem.queueNumber === appointment.queueNumber);
+      const item = caseForAppointment(appointment);
       return item ? isCaseVisibleToDoctor(item, doctor) : appointment.doctorId === doctor.id;
     });
   }
-  res.json({ appointments });
+  res.json({
+    appointments: appointments.map((appointment) => {
+      const linkedCase = caseForAppointment(appointment);
+      if (!linkedCase) return appointment;
+      if (isCompletedCase(linkedCase)) return { ...appointment, status: 'complete', visitStatus: 'visit_complete' };
+      if (isCancelledCase(linkedCase)) return { ...appointment, status: 'cancelled', visitStatus: linkedCase.visitStatus };
+      return { ...appointment, visitStatus: linkedCase.visitStatus };
+    })
+  });
 });
 
 app.patch('/api/appointments/:id/send-to-doctor', (req, res) => {
@@ -742,21 +754,31 @@ app.patch('/api/cases/:id/assistant-close', (req, res) => {
   if (!item) return res.status(404).json({ error: 'Case not found' });
   const optionalBeforeDoctor = !canAssistantCollectFees(item) && ['assistant_intake', 'doctor_queue'].includes(item.status);
   const updateAlreadyCollectedFees = canAssistantMarkComplete(item);
-  if (!canAssistantCollectFees(item) && !optionalBeforeDoctor && !updateAlreadyCollectedFees) {
+  const updateCompletedFees = isCompletedCase(item) && item.closure?.feesCollected;
+  if (!canAssistantCollectFees(item) && !optionalBeforeDoctor && !updateAlreadyCollectedFees && !updateCompletedFees) {
     return res.status(409).json({ error: 'Doctor has not completed analysis yet. Assistant can save optional fees, but cannot close work.' });
   }
-  if (item.status === 'completed') {
+  if (item.status === 'completed' && !updateCompletedFees) {
     return res.status(409).json({ error: 'Visit is already complete.' });
   }
   const fees = normalizeFeeCollection(req.body, { required: true, requireUpiReceipt: !optionalBeforeDoctor });
   item.closure = { ...(item.closure || {}), ...fees };
   if (!item.closure.closedAt) item.closure.closedAt = new Date().toISOString();
   if (!item.closure.closedBy) item.closure.closedBy = 'Assistant';
-  if (!optionalBeforeDoctor) {
+  item.updatedAt = new Date().toISOString();
+  if (updateCompletedFees) {
+    item.status = 'completed';
+    item.visitStatus = 'visit_complete';
+    if (!item.completedAt) item.completedAt = new Date().toISOString();
+    const appointment = findCaseAppointment(item);
+    if (appointment) {
+      appointment.status = 'complete';
+      appointment.updatedAt = item.updatedAt;
+    }
+  } else if (!optionalBeforeDoctor) {
     item.status = 'assistant_closure';
     item.visitStatus = 'assistant_work_done';
   }
-  item.updatedAt = new Date().toISOString();
   item.patient.timeline.unshift({ id: `TL-${Date.now()}`, title: 'Assistant fees collection', date: today(), note: 'Fees and payment details updated' });
   log('ASSISTANT_CLOSE_CASE', 'Assistant', item.id);
   res.json({ case: item });
