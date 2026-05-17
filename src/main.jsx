@@ -44,7 +44,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
+const API_BASE_URL = (import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:4000/api' : '/api')).replace(/\/+$/, '');
 const DRAFT_KEY = 'smileRecordsAssistantDrafts';
 const SESSION_KEY = 'smileRecordsCurrentUser';
 const GENDER_OPTIONS = ['Male', 'Female', 'Other', 'Prefer not to say'];
@@ -1225,7 +1225,7 @@ function AssistantIntake() {
         <>
           <DoctorRadioSelector doctors={doctorOptions} selectedDoctorId={effectiveDoctorId} onChange={setSelectedDoctorId} />
           <TodayStatusDashboard selectedDate={selectedDate} activeStatus={statusFilter} onStatusChange={setStatusFilter} doctorId={effectiveDoctorId} assistantEmail={currentUser?.email || ''} />
-          <AppointmentCalendar compact selectedDate={selectedDate} statusFilter={statusFilter} role="assistant" doctorId={effectiveDoctorId} />
+          <AppointmentCalendar compact selectedDate={selectedDate} statusFilter={statusFilter} role="assistant" doctorId={effectiveDoctorId} assistantEmail={currentUser?.email || ''} />
         </>
       )}
     </MobilePage>
@@ -1318,7 +1318,7 @@ function PatientHistoryDays({ historyDays = [], compact = false }) {
 
 function TodayStatusDashboard({ selectedDate, activeStatus, onStatusChange, label = 'Today Status', scopeStatus = '', doctorId = '', doctorEmail = '', assistantEmail = '' }) {
   const [refresh, setRefresh] = useState(0);
-  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}`;
+  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}${assistantEmail ? `&assistantEmail=${encodeURIComponent(assistantEmail)}` : ''}`;
   const feesPath = `/fees-summary?date=${encodeURIComponent(selectedDate)}${assistantEmail ? `&assistantEmail=${encodeURIComponent(assistantEmail)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}` : ''}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}`;
   const { data, loading } = useApi(appointmentPath, refresh);
   const { data: feesData, loading: feesLoading } = useApi(feesPath, refresh);
@@ -2009,25 +2009,29 @@ function DoctorQueue() {
   const currentUser = getStoredUser();
   const [selectedDate, setSelectedDate] = useState(todayDate());
   const [tab, setTab] = useState('my');
-  const dashboardStatus = tab === 'my' ? 'doctor_queue' : 'all';
+  const [statusFilter, setStatusFilter] = useState('all');
   const doctorId = tab === 'my' ? currentUser?.id : '';
   const mappedScope = tab === 'overall' ? currentUser?.email : '';
   const pageTitle = tab === 'my' ? 'My Queue' : 'Overall Queue';
+  const switchTab = (nextTab) => {
+    setTab(nextTab);
+    setStatusFilter('all');
+  };
   return (
     <MobilePage title={<span className="doctor-queue-title">{pageTitle}</span>} action={<DatePickerControl value={selectedDate} onChange={setSelectedDate} />}>
       <div className="doctor-tabs">
-        <button className={tab === 'my' ? 'active' : ''} type="button" onClick={() => setTab('my')}>My Queue</button>
-        <button className={tab === 'overall' ? 'active' : ''} type="button" onClick={() => setTab('overall')}>Overall Queue</button>
+        <button className={tab === 'my' ? 'active' : ''} type="button" onClick={() => switchTab('my')}>My Queue</button>
+        <button className={tab === 'overall' ? 'active' : ''} type="button" onClick={() => switchTab('overall')}>Overall Queue</button>
       </div>
       <TodayStatusDashboard
         selectedDate={selectedDate}
-        activeStatus={dashboardStatus}
-        onStatusChange={() => {}}
+        activeStatus={statusFilter}
+        onStatusChange={setStatusFilter}
         label={tab === 'my' ? 'My Queue - Live' : 'Overall Queue - Live'}
         doctorId={doctorId}
         doctorEmail={mappedScope}
       />
-      <AppointmentCalendar compact role="doctor" statusFilter={tab === 'my' ? 'doctor_queue' : 'all'} selectedDate={selectedDate} doctorId={doctorId} doctorEmail={mappedScope} />
+      <AppointmentCalendar compact role="doctor" statusFilter={statusFilter} selectedDate={selectedDate} doctorId={doctorId} doctorEmail={mappedScope} />
     </MobilePage>
   );
 }
@@ -2048,7 +2052,24 @@ function DoctorCase() {
     if (item?.doctor?.prescriptionItems?.length) {
       setPrescriptionItems(item.doctor.prescriptionItems);
     }
+    if (item?.doctor?.testsRequested?.length) {
+      setSelectedTests(item.doctor.testsRequested.map((test) => (
+        typeof test === 'string' ? { id: test, name: test } : test
+      )));
+    }
   }, [item?.id]);
+
+  const buildPrintableDoctorCase = (form) => {
+    const formValues = Object.fromEntries(new FormData(form));
+    const printableDoctor = {
+      ...item.doctor,
+      ...formValues,
+      testsRequested: selectedTests.map((test) => test.name),
+      prescriptionItems,
+      prescription: formatList(prescriptionItems)
+    };
+    return { ...item, doctor: printableDoctor };
+  };
 
   const saveDoctorCase = async (payload) => {
     payload.testsRequested = selectedTests.map((test) => test.name);
@@ -2107,7 +2128,7 @@ function DoctorCase() {
           <DateInput name="nextVisitDate" label="Next visit date" value={item.doctor?.nextVisitDate} />
         </MobileSection>
         <div className="sticky-actions">
-          <button className="secondary-button" type="button" onClick={() => printPrescription({ ...item, doctor: { ...item.doctor, testsRequested: selectedTests.map((test) => test.name), prescriptionItems } })}><Printer size={18} />Print</button>
+          <button className="secondary-button" type="button" onClick={(event) => printPrescription(buildPrintableDoctorCase(event.currentTarget.form))}><Printer size={18} />Print</button>
           <button className="primary-button" type="submit"><CheckCircle2 size={18} />Submit Case</button>
           <button className="secondary-button danger-action" type="button" onClick={() => setConfirmDoctorCancel(true)}><Trash2 size={18} />Cancel Case</button>
         </div>
@@ -2526,9 +2547,9 @@ function CompactPatientRows({ loading, error, cases, onRefresh }) {
   );
 }
 
-function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role = 'assistant', doctorId = '', doctorEmail = '' }) {
+function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role = 'assistant', doctorId = '', doctorEmail = '', assistantEmail = '' }) {
   const [refresh, setRefresh] = useState(0);
-  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}`;
+  const appointmentPath = `/appointments?date=${encodeURIComponent(selectedDate)}${doctorId ? `&doctorId=${encodeURIComponent(doctorId)}` : ''}${doctorEmail ? `&doctorEmail=${encodeURIComponent(doctorEmail)}&scope=mapped` : ''}${assistantEmail ? `&assistantEmail=${encodeURIComponent(assistantEmail)}` : ''}`;
   const { data, loading } = useApi(appointmentPath, refresh);
   const [appointments, setAppointments] = useState([]);
   const [dragIndex, setDragIndex] = useState(null);
@@ -2638,16 +2659,29 @@ function AppointmentCalendar({ compact, selectedDate, statusFilter = 'all', role
       )) : <p className="muted">No {sectionName.toLowerCase()}.</p>}
     </div>
   );
+  const visibleSections = statusFilter === 'all'
+    ? [
+        { rows: openAppointments, name: role === 'assistant' ? 'Scheduled' : 'Open Cases', offset: 0 },
+        { rows: feesPendingAppointments, name: 'Fees Collection', offset: openAppointments.length },
+        { rows: closedAppointments, name: 'Closed Cases', offset: openAppointments.length + feesPendingAppointments.length },
+        { rows: cancelledAppointments, name: 'Cancelled Cases', offset: openAppointments.length + feesPendingAppointments.length + closedAppointments.length }
+      ]
+    : statusFilter === 'doctor_done'
+      ? [{ rows: feesPendingAppointments, name: 'Fees Collection', offset: 0 }]
+      : statusFilter === 'complete'
+        ? [{ rows: closedAppointments, name: 'Closed Cases', offset: 0 }]
+        : statusFilter === 'cancelled'
+          ? [{ rows: cancelledAppointments, name: 'Cancelled Cases', offset: 0 }]
+          : [{ rows: openAppointments, name: role === 'assistant' ? 'Scheduled' : 'Open Cases', offset: 0 }];
 
   return (
     <section className={compact ? 'appointment-card compact' : 'appointment-card'}>
       <div className="appointment-list">
         {loading && <p className="muted">Loading appointments...</p>}
         {message && <p className="queue-message">{message}</p>}
-        {renderRows(openAppointments, role === 'assistant' ? 'Scheduled' : 'Open Cases')}
-        {renderRows(feesPendingAppointments, 'Fees Collection', openAppointments.length)}
-        {renderRows(closedAppointments, 'Closed Cases', openAppointments.length + feesPendingAppointments.length)}
-        {renderRows(cancelledAppointments, 'Cancelled Cases', openAppointments.length + feesPendingAppointments.length + closedAppointments.length)}
+        {visibleSections.map((section) => (
+          <React.Fragment key={section.name}>{renderRows(section.rows, section.name, section.offset)}</React.Fragment>
+        ))}
       </div>
       {confirmAction && (
         <div className="confirm-overlay" role="dialog" aria-modal="true">

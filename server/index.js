@@ -62,12 +62,14 @@ app.get('/api/admin/export', (req, res) => {
 });
 
 app.get('/api/dashboard', (req, res) => {
+  const date = normalizeDate(req.query.date || '') || today();
   const subscriptionOverview = buildSubscriptionOverview();
   res.json({
+    date,
     metrics: [
       { label: 'Doctor Queue', value: countCases('doctor_queue'), hint: 'Waiting for analysis' },
       { label: 'Assistant Work', value: countCases('assistant_closure'), hint: 'Fees collection' },
-      { label: 'Completed Cases', value: countCases('completed'), hint: 'Closed today' },
+      { label: 'Completed Cases', value: db.cases.filter((item) => isCompletedCase(item) && caseCompletionDate(item) === date).length, hint: 'Closed today' },
       { label: 'Now Serving', value: db.queue.nowServing, hint: 'Current token' },
       { label: 'Total Patients', value: db.patients.length, hint: 'Clinic records' },
       { label: 'Pending Approvals', value: db.users.filter((item) => item.status === 'Pending').length, hint: 'Admin action' },
@@ -314,14 +316,23 @@ app.get('/api/appointments', (req, res) => {
   const selectedDate = req.query.date;
   const doctorId = String(req.query.doctorId || '').trim();
   const doctor = findDoctor('', req.query.doctorEmail);
+  const assistant = findAssistant('', req.query.assistantEmail);
   const caseForAppointment = (appointment) => db.cases.find((caseItem) => caseItem.id === appointment.caseId || caseItem.queueNumber === appointment.queueNumber);
   let appointments = selectedDate
     ? db.appointments.filter((item) => {
       const linkedCase = caseForAppointment(item);
-      return appointmentDate(item) === selectedDate || (linkedCase && isCompletedCase(linkedCase) && caseActivityDate(linkedCase) === selectedDate);
+      return appointmentDate(item) === selectedDate || (linkedCase && caseMatchesStatusDate(linkedCase, selectedDate));
     })
     : db.appointments;
   if (doctorId) appointments = appointments.filter((item) => item.doctorId === doctorId);
+  if (assistant && !doctorId) {
+    const mappedDoctorIds = getMappedDoctorIdsForAssistant(assistant);
+    appointments = appointments.filter((appointment) => {
+      const item = caseForAppointment(appointment);
+      if (item) return item.assistantId === assistant.id || mappedDoctorIds.includes(item.assignedDoctorId);
+      return mappedDoctorIds.includes(appointment.doctorId);
+    });
+  }
   if (doctor && req.query.scope === 'mapped') {
     appointments = appointments.filter((appointment) => {
       const item = caseForAppointment(appointment);
@@ -834,15 +845,20 @@ app.get('/api/fees-summary', (req, res) => {
   const doctor = findDoctor(req.query.doctorId, req.query.doctorEmail);
   const mappedDoctorIds = assistant ? getMappedDoctorIdsForAssistant(assistant) : [];
   const allowedDoctorIds = doctor ? [doctor.id] : (doctorId ? [doctorId] : mappedDoctorIds);
+  const inAssistantScope = (item) => !assistant || item.assistantId === assistant.id || mappedDoctorIds.includes(item.assignedDoctorId);
+  const inDoctorScope = (item) => !allowedDoctorIds.length || allowedDoctorIds.includes(item.assignedDoctorId);
   const paidCases = db.cases.filter((item) => (
     item.closure?.closedAt
     && item.closure?.feesCollected
     && item.closure.closedAt.slice(0, 10) === date
-    && (!allowedDoctorIds.length || allowedDoctorIds.includes(item.assignedDoctorId))
+    && inAssistantScope(item)
+    && inDoctorScope(item)
   ));
   const readyCases = db.cases.filter((item) => (
     canAssistantCollectFees(item)
-    && (!allowedDoctorIds.length || allowedDoctorIds.includes(item.assignedDoctorId))
+    && caseMatchesStatusDate(item, date)
+    && inAssistantScope(item)
+    && inDoctorScope(item)
   ));
   res.json({
     date,
@@ -1547,11 +1563,19 @@ function caseCompletionDate(item) {
 
 function caseDashboardDate(item) {
   const appointment = db.appointments.find((record) => record.caseId === item.id || record.queueNumber === item.queueNumber);
-  return (item.patient?.appointmentDate || appointment?.date || item.createdAt || item.updatedAt || today()).slice(0, 10);
+  return (appointment?.date || item.patient?.appointmentDate || item.createdAt || item.updatedAt || today()).slice(0, 10);
 }
 
 function caseActivityDate(item) {
   return (item.closure?.closedAt || item.doctor?.submittedAt || item.updatedAt || item.createdAt || today()).slice(0, 10);
+}
+
+function caseMatchesStatusDate(item, date) {
+  if (!date) return true;
+  if (caseDashboardDate(item) === date) return true;
+  if (isCompletedCase(item) && caseCompletionDate(item) === date) return true;
+  if (isCancelledCase(item) && caseActivityDate(item) === date) return true;
+  return canAssistantCollectFees(item) && caseActivityDate(item) === date;
 }
 
 function toAmount(value) {
